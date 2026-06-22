@@ -1,6 +1,6 @@
 from .Deserializer import Deserializer
-from Payload import Payload
-from SerializedPayload import SerializedPayload
+from Payload.Payload import Payload
+from Payload.SerializedPayload import SerializedPayload
 
 
 class DigitalDeserializer(Deserializer):

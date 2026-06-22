@@ -1,6 +1,6 @@
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
-from SerializedPayload import SerializedPayload
+from Payload.SerializedPayload import SerializedPayload
 from abc import ABC, abstractmethod
 
 

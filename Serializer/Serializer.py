@@ -1,5 +1,5 @@
-from SerializedPayload import SerializedPayload
-from Payload import Payload
+from Payload.SerializedPayload import SerializedPayload
+from Payload.Payload import Payload
 from abc import ABC, abstractmethod
 
 class Serializer(ABC):

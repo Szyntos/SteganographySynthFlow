@@ -1,5 +1,5 @@
-from Payload import Payload
-from SerializedPayload import SerializedPayload
+from Payload.Payload import Payload
+from Payload.SerializedPayload import SerializedPayload
 from .Serializer import Serializer
 
 
