@@ -1,10 +1,12 @@
 from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
-from Deserializer import Deserializer, DigitalDeserializer
+from Deserializer import Deserializer, ImageDeserializer
 from Encoder import Encoder, EncodingStrategy, TwoSplitEncodingStrategy
 from Serializer import Serializer, DigitalSerializer
 from MidiInput import MidiInput
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Payload import Payload
+from SerializerMode import SerializerMode
+from Sink import ImageSink, SinkBehaviour
 
 
 def main():
@@ -13,15 +15,18 @@ def main():
 
     additive_wave_generator: AdditiveWaveGenerator = AdditiveWaveGenerator()
     encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(additive_wave_generator)
+    bits_per_float: int = 2
 
-    serializer: Serializer = DigitalSerializer()
+    serializer: Serializer = DigitalSerializer(SerializerMode.DIGITAL, bits_per_float)
     encoder: Encoder = Encoder(serializer, encoding_strategy)
 
     encoder.set_payload(payload)
 
     decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator)
-    deserializer: Deserializer = DigitalDeserializer()
-    decoder: Decoder = Decoder(deserializer, decoding_strategy)
+    deserializer: Deserializer = ImageDeserializer(SerializerMode.DIGITAL, bits_per_float)
+
+    sink: ImageSink = ImageSink(SinkBehaviour.LIVE)
+    decoder: Decoder = Decoder(deserializer, decoding_strategy, sink)
 
     midi_input.on_play(encoder.set_f0)
 

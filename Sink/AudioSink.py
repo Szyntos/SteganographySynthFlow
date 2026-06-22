@@ -1,7 +1,11 @@
-from Payload import Payload
+from Payload import AudioPayload
 from .Sink import Sink
+from .SinkBehaviour import SinkBehaviour
 
 
-class AudioSink(Sink):
-    def push(self, payload: Payload) -> None:
-        return
+class AudioSink(Sink[AudioPayload]):
+    def __init__(self):
+        super().__init__(SinkBehaviour.LIVE)
+
+    def push(self, payload: AudioPayload) -> None:
+        pass

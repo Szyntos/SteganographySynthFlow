@@ -22,4 +22,4 @@ class Decoder:
         self._sink.push(payload)
         if isinstance(payload, AudioPayload):
             return payload.to_audio_chunk()
-        return AudioChunk.silence()
+        return AudioChunk()
