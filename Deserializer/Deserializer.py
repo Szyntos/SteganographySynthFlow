@@ -2,9 +2,12 @@ from SerializedPayload import SerializedPayload
 from Payload import Payload
 from abc import ABC, abstractmethod
 
-class Serializer:
+
+
+class Deserializer(ABC):
     def __init__(self):
         pass
+
     @abstractmethod
-    def serialize_payload(self, payload: Payload) -> SerializedPayload:
+    def deserialize_payload(self, serialized_payload: SerializedPayload) -> Payload:
         pass

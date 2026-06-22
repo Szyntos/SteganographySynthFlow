@@ -6,9 +6,6 @@ class AdditiveWaveGenerator:
         self._phases: List[float] = []
         self._chunk_size: int = 0
 
-    def advance_phases(self) -> None:
-        pass
-
     def set_chunk_size(self, chunk_size: int):
         self._chunk_size = chunk_size
 
@@ -22,5 +19,4 @@ class AdditiveWaveGenerator:
         return self._omegas
 
     def get_phases(self) -> List[float]:
-        self.advance_phases()
         return self._phases
