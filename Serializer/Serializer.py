@@ -1,8 +1,8 @@
 from Payload.SerializedPayload import SerializedPayload
-from Payload.Payload import Payload
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar
 
+from Payload.Payload import Payload
 from SerializerMode import SerializerMode
 
 T = TypeVar('T', bound=Payload)
@@ -13,5 +13,5 @@ class Serializer(ABC, Generic[T]):
         self._bits_per_float: int = bits_per_float
 
     @abstractmethod
-    def serialize_payload(self, payload: Payload) -> SerializedPayload:
+    def serialize_payload(self, payload: T) -> SerializedPayload:
         pass

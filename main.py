@@ -1,10 +1,11 @@
 from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
 from Deserializer import Deserializer, ImageDeserializer
 from Encoder import Encoder, EncodingStrategy, TwoSplitEncodingStrategy
-from Serializer import Serializer, DigitalSerializer
+from Serializer import Serializer
 from MidiInput import MidiInput
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Payload import Payload
+from Serializer.ImageSerializer import ImageSerializer
 from SerializerMode import SerializerMode
 from Sink import ImageSink, SinkBehaviour
 
@@ -17,7 +18,7 @@ def main():
     encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(additive_wave_generator)
     bits_per_float: int = 2
 
-    serializer: Serializer = DigitalSerializer(SerializerMode.DIGITAL, bits_per_float)
+    serializer: Serializer = ImageSerializer(SerializerMode.DIGITAL, bits_per_float)
     encoder: Encoder = Encoder(serializer, encoding_strategy)
 
     encoder.set_payload(payload)

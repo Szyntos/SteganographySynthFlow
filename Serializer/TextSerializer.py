@@ -8,5 +8,5 @@ class TextSerializer(Serializer[TextPayload]):
     def __init__(self, serializer_mode: SerializerMode, bits_per_float: int = 1):
         super().__init__(serializer_mode, bits_per_float)
 
-    def serialize_payload(self, serialized_payload: SerializedPayload) -> TextPayload:
+    def serialize_payload(self, payload: TextPayload) -> SerializedPayload:
         pass
