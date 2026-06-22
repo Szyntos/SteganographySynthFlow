@@ -1,8 +1,8 @@
 from AudioChunk import AudioChunk
-import EncodingStrategy
+from .EncodingStrategy import EncodingStrategy
 from Payload import Payload
 from SerializedPayload import SerializedPayload
-from Serializer.Serializer import Serializer
+from Serializer import Serializer
 
 
 class Encoder:

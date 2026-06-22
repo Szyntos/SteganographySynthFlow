@@ -1,6 +1,6 @@
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
-from EncodingStrategy import EncodingStrategy
+from .EncodingStrategy import EncodingStrategy
 
 
 class TwoSplitEncodingStrategy(EncodingStrategy):

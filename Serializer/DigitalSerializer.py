@@ -1,6 +1,6 @@
 from Payload import Payload
 from SerializedPayload import SerializedPayload
-from Serializer.Serializer import Serializer
+from .Serializer import Serializer
 
 
 class DigitalSerializer(Serializer):

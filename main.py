@@ -1,16 +1,10 @@
-from Decoder import Decoder
-from Decoder import DecodingStrategy
-from Decoder import TwoSplitDecodingStrategy
-from Deserializer.Deserializer import Deserializer
-from Deserializer.DigitalDeserializer import DigitalDeserializer
-from Encoder.Encoder import Encoder
-from Encoder.EncodingStrategy import EncodingStrategy
-from Encoder.TwoSplitEncodingStrategy import TwoSplitEncodingStrategy
+from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
+from Deserializer import Deserializer, DigitalDeserializer
+from Encoder import Encoder, EncodingStrategy, TwoSplitEncodingStrategy
+from Serializer import Serializer, DigitalSerializer
 from MidiInput import MidiInput
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Payload import Payload
-from Serializer.Serializer import Serializer
-from Serializer.DigitalSerializer import DigitalSerializer
 
 
 def main():

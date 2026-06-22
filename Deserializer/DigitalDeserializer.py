@@ -1,4 +1,4 @@
-from Deserializer import Deserializer
+from .Deserializer import Deserializer
 from Payload import Payload
 from SerializedPayload import SerializedPayload
 
