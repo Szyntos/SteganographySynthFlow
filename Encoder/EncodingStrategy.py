@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 class EncodingStrategy(ABC):
     def __init__(self, additive_wave_generator: AdditiveWaveGenerator):
         self._additive_wave_generator: AdditiveWaveGenerator = additive_wave_generator
-        self._serialized_payload: SerializedPayload = SerializedPayload()
+        self._serialized_payload: SerializedPayload = SerializedPayload([])
         self._f0: float = 0.0
 
     def set_serialized_payload(self, serialized_payload: SerializedPayload):

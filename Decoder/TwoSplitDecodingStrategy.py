@@ -9,4 +9,4 @@ class TwoSplitDecodingStrategy(DecodingStrategy):
         super().__init__(additive_wave_generator)
 
     def decode_samples(self, input_samples: AudioChunk, num_samples: int) -> SerializedPayload:
-        return SerializedPayload()
+        return SerializedPayload([0.2 for _ in range(num_samples)])

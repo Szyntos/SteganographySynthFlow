@@ -8,4 +8,4 @@ class TwoSplitEncodingStrategy(EncodingStrategy):
         super().__init__(additive_wave_generator)
 
     def generate_samples(self, num_samples: int) -> AudioChunk:
-        return AudioChunk()
+        return AudioChunk([i**3 for i in range(num_samples)])

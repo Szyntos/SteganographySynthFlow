@@ -20,6 +20,4 @@ class Decoder:
         serialized = self._decoding_strategy.decode_samples(input_samples, num_samples)
         payload = self._deserializer.deserialize_payload(serialized)
         self._sink.push(payload)
-        if isinstance(payload, AudioPayload):
-            return payload.to_audio_chunk()
-        return AudioChunk()
+        return payload.to_audio_chunk()

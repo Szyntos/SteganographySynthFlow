@@ -9,12 +9,12 @@ T = TypeVar('T', bound=Payload)
 
 
 class Deserializer(ABC, Generic[T]):
-    def __init__(self, serializer_mode: SerializerMode, bits_per_float: int = 1):
+    def __init__(self, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
         self._serializer_mode: SerializerMode = serializer_mode
-        self._bits_per_float: int = bits_per_float
+        self._bits_per_symbol: int = bits_per_symbol
 
-    def set_bits_per_float(self, bits_per_float: int):
-        self._bits_per_float = bits_per_float
+    def set_bits_per_symbol(self, bits_per_symbol: int):
+        self._bits_per_symbol = bits_per_symbol
 
     def set_serializer_mode(self, serializer_mode: SerializerMode):
         self._serializer_mode = serializer_mode

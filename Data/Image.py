@@ -1,3 +1,6 @@
-class Image:
+from Data import Data
+
+
+class Image(Data):
     def __init__(self):
-        pass
+        super().__init__()

@@ -1,3 +1,6 @@
-class Text:
+from Data import Data
+
+
+class Text(Data):
     def __init__(self):
-        pass
+        super().__init__()

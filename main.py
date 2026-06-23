@@ -1,32 +1,33 @@
 from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
-from Deserializer import Deserializer, ImageDeserializer
+from Deserializer import Deserializer, ImageDeserializer, AudioDeserializer
 from Encoder import Encoder, EncodingStrategy, TwoSplitEncodingStrategy
-from Serializer import Serializer
+from Serializer import Serializer, AudioSerializer
 from MidiInput import MidiInput
 from AdditiveWaveGenerator import AdditiveWaveGenerator
-from Payload import Payload
+from Payload import Payload, ImagePayload, AudioPayload
 from Serializer.ImageSerializer import ImageSerializer
 from SerializerMode import SerializerMode
-from Sink import ImageSink, SinkBehaviour
+from Sink import ImageSink, SinkBehaviour, AudioSink, Sink
 
 
 def main():
     midi_input: MidiInput = MidiInput()
-    payload: Payload = Payload()
+    payload: Payload = AudioPayload(512)
 
-    additive_wave_generator: AdditiveWaveGenerator = AdditiveWaveGenerator()
-    encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(additive_wave_generator)
-    bits_per_float: int = 2
+    additive_wave_generator_encoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
+    additive_wave_generator_decoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
+    encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(additive_wave_generator_encoding)
+    bits_per_symbol: int = 2
 
-    serializer: Serializer = ImageSerializer(SerializerMode.DIGITAL, bits_per_float)
+    serializer: Serializer = AudioSerializer(SerializerMode.DIGITAL, bits_per_symbol)
     encoder: Encoder = Encoder(serializer, encoding_strategy)
 
     encoder.set_payload(payload)
 
-    decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator)
-    deserializer: Deserializer = ImageDeserializer(SerializerMode.DIGITAL, bits_per_float)
+    decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator_decoding)
+    deserializer: Deserializer = AudioDeserializer(SerializerMode.DIGITAL, bits_per_symbol)
 
-    sink: ImageSink = ImageSink(SinkBehaviour.LIVE)
+    sink: Sink = AudioSink(SinkBehaviour.LIVE)
     decoder: Decoder = Decoder(deserializer, decoding_strategy, sink)
 
     midi_input.on_play(encoder.set_f0)

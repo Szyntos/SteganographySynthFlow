@@ -16,7 +16,7 @@ class Encoder:
         self._encoding_strategy = encoding_strategy
         self._f0 = 440.0
         self._payload = None
-        self._serialized_payload = SerializedPayload()
+        self._serialized_payload = SerializedPayload([])
 
         self._encoding_strategy.set_f0(self._f0)
 

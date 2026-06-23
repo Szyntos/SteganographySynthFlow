@@ -1,3 +1,6 @@
-class Binary:
+from Data import Data
+
+
+class Binary(Data):
     def __init__(self):
-        pass
+        super().__init__()
