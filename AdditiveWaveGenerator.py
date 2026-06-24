@@ -1,5 +1,8 @@
 from typing import List
 
+from AudioChunk import AudioChunk
+
+
 class AdditiveWaveGenerator:
     def __init__(self):
         self._omegas: List[float] = []
@@ -20,3 +23,9 @@ class AdditiveWaveGenerator:
 
     def get_phases(self) -> List[float]:
         return self._phases
+
+    def generate(self) -> AudioChunk:
+        pass  # synthesis: sum sinusoids at _omegas/_phases for _chunk_size samples
+
+    def analyze(self, chunk: AudioChunk) -> List[float]:
+        pass  # analysis: extract per-partial phases from chunk at _omegas

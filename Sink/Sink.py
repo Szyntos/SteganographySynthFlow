@@ -1,8 +1,9 @@
 from abc import abstractmethod, ABC
 from typing import Generic, TypeVar
 
+from AudioChunk import AudioChunk
 from Payload import Payload
-from Sink.SinkBehaviour import SinkBehaviour
+from SinkBehaviour import SinkBehaviour
 
 T = TypeVar('T', bound=Payload)
 
@@ -12,5 +13,5 @@ class Sink(ABC, Generic[T]):
         self._sink_behaviour: SinkBehaviour = sink_behaviour
 
     @abstractmethod
-    def push(self, payload: T) -> None:
+    def push(self, payload: T) -> AudioChunk:
         pass

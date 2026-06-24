@@ -1,6 +1,4 @@
 from Data import Data
-
-from AudioChunk import AudioChunk
 from Payload import Payload
 
 
@@ -14,5 +12,5 @@ class AudioPayload(Payload):
     def get_data(self) -> Data:
         pass
 
-    def to_audio_chunk(self) -> AudioChunk:
-        return AudioChunk([i**2 for i in range(self._size)])
+    def get_size(self):
+        return

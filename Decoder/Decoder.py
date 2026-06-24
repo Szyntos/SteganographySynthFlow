@@ -1,23 +1,21 @@
 from AudioChunk import AudioChunk
-from Payload import AudioPayload
-from Sink import Sink
+from Codec.DecoderCodec import DecoderCodec
 from .DecodingStrategy import DecodingStrategy
-from Deserializer.Deserializer import Deserializer
 
 
 class Decoder:
     def __init__(
             self,
-            deserializer: Deserializer,
+            codec: DecoderCodec,
             decoding_strategy: DecodingStrategy,
-            sink: Sink,
     ):
-        self._deserializer: Deserializer = deserializer
+        self._codec: DecoderCodec = codec
         self._decoding_strategy: DecodingStrategy = decoding_strategy
-        self._sink: Sink = sink
+
+    def set_codec(self, codec: DecoderCodec) -> None:
+        self._codec = codec
 
     def process(self, input_samples: AudioChunk, num_samples: int) -> AudioChunk:
         serialized = self._decoding_strategy.decode_samples(input_samples, num_samples)
-        payload = self._deserializer.deserialize_payload(serialized)
-        self._sink.push(payload)
-        return payload.to_audio_chunk()
+        payload = self._codec.deserializer().deserialize_payload(serialized)
+        return self._codec.sink().push(payload)

@@ -1,4 +1,3 @@
-from AudioChunk import AudioChunk
 from Data import Data
 from abc import ABC, abstractmethod
 
@@ -14,5 +13,7 @@ class Payload(ABC):
     @abstractmethod
     def get_data(self) -> Data:
         pass
-    def to_audio_chunk(self) -> AudioChunk:
-        return AudioChunk.silence(self._size)
+
+    @abstractmethod
+    def get_size(self):
+        pass

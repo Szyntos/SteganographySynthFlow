@@ -1,3 +1,4 @@
+from typing import Tuple
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Payload import SerializedPayload
