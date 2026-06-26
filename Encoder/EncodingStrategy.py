@@ -2,14 +2,15 @@ from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Payload.SerializedPayload import SerializedPayload
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from Serializer import Serializer
 
 
 class EncodingStrategy(ABC):
-    def __init__(self, additive_wave_generator: AdditiveWaveGenerator, serializer: Serializer):
+    def __init__(self, additive_wave_generator: AdditiveWaveGenerator):
         self._additive_wave_generator: AdditiveWaveGenerator = additive_wave_generator
-        self._serializer: Serializer = serializer
+        self._serializer: Optional[Serializer] = None
         self._f0: float = 0.0
 
     def set_serializer(self, serializer: Serializer):

@@ -18,7 +18,7 @@ def main():
     bits_per_symbol: int = 2
 
     encoder_codec = AudioEncoderCodec(SerializerMode.DIGITAL, bits_per_symbol)
-    encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(encoder_codec.serializer(), additive_wave_generator_encoding)
+    encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(additive_wave_generator_encoding)
 
     encoder: Encoder = Encoder(encoder_codec, encoding_strategy)
     encoder.set_payload(AudioPayload())

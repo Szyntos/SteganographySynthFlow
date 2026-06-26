@@ -19,8 +19,11 @@ class Serializer(ABC, Generic[T]):
 
     def get_symbol_row(self, num_symbols: int) -> SymbolRow:
         result: SymbolRow = SymbolRow(list(islice(cycle(self._serialized_payload.get_offsets()), self._symbol_index, self._symbol_index + num_symbols)))
-        self._symbol_index += num_symbols
+        self._symbol_index = (self._symbol_index + num_symbols) % self._serialized_payload.get_size()
         return result
+
+    def reset_loop(self) -> None:
+        self._symbol_index = 0
 
     @abstractmethod
     def load_payload(self, payload: T) -> None:

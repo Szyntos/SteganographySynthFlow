@@ -1,4 +1,4 @@
-from Payload import AudioPayload, SymbolRow
+from Payload import AudioPayload, SymbolRow, SerializedPayload
 from SerializerMode import SerializerMode
 from .Serializer import Serializer
 
@@ -9,4 +9,4 @@ class AudioSerializer(Serializer[AudioPayload]):
 
     def load_payload(self, payload: AudioPayload) -> None:
         self._payload = payload
-        self._serialized_payload = self._payload
+        self._serialized_payload = SerializedPayload(payload.get_data())
