@@ -1,16 +1,14 @@
 from typing import List
 
 from Framing import FramingSyncController
-from Payload import BinaryPayload, SymbolRow
+from Payload import Payload, SymbolRow
 from . import SinkBehaviour
 from .Sink import Sink
 
 
-class BinarySink(Sink[BinaryPayload]):
+class BinarySink(Sink):
     def __init__(self, framing_sync_controller: FramingSyncController, sink_behaviour: SinkBehaviour):
         super().__init__(framing_sync_controller, sink_behaviour)
-        self._binaries: List[BinaryPayload] = []
-        self._spare_symbols: List[SymbolRow] = []
 
     def push(self, payload: SymbolRow) -> None:
         self.collect(payload)

@@ -1,12 +1,13 @@
-from Codec.Audio import AudioDecoderCodec, AudioEncoderCodec
 from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
+from Deserializer import Deserializer, AudioDeserializer
 from Encoder import Encoder, EncodingStrategy, TwoSplitEncodingStrategy
 from Framing import FramingSyncController
 from MidiInput import MidiInput
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Payload import AudioPayload
+from Serializer import AudioSerializer, Serializer
 from SerializerMode import SerializerMode
-from Sink import SinkBehaviour
+from Sink import SinkBehaviour, AudioSink, Sink
 
 
 def main():
@@ -16,14 +17,14 @@ def main():
 
     bits_per_symbol: int = 2
 
-    encoder_codec = AudioEncoderCodec(SerializerMode.DIGITAL, bits_per_symbol)
+    serializer: Serializer = AudioSerializer(SerializerMode.DIGITAL, bits_per_symbol)
 
     encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(
-        additive_wave_generator_encoding, encoder_codec.serializer()
+        additive_wave_generator_encoding, serializer
     )
     encoding_strategy.load_payload(AudioPayload())
 
-    encoder: Encoder = Encoder(encoder_codec, encoding_strategy)
+    encoder: Encoder = Encoder(encoding_strategy)
 
 
     additive_wave_generator_decoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
@@ -31,8 +32,9 @@ def main():
     decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator_decoding)
 
     framing_sync_controller: FramingSyncController = FramingSyncController()
-    decoder_codec = AudioDecoderCodec(SerializerMode.DIGITAL, bits_per_symbol, SinkBehaviour.LIVE, framing_sync_controller)
-    decoder: Decoder = Decoder(decoder_codec, decoding_strategy)
+    deserializer: Deserializer = AudioDeserializer(SerializerMode.DIGITAL, bits_per_symbol)
+    sink: Sink = AudioSink(framing_sync_controller, SinkBehaviour.LIVE)
+    decoder: Decoder = Decoder(decoding_strategy, deserializer, sink)
 
     midi_input.on_play(encoder.set_f0)
     midi_input.trigger(440.0)

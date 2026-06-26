@@ -1,19 +1,17 @@
 from Payload import SymbolRow
 from Payload.SerializedPayload import SerializedPayload
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar, Optional
+from typing import Optional
 from itertools import islice, cycle
 
 from Payload.Payload import Payload
 from SerializerMode import SerializerMode
 
-T = TypeVar('T', bound=Payload)
-
-class Serializer(ABC, Generic[T]):
+class Serializer(ABC):
     def __init__(self, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
         self._serializer_mode: SerializerMode = serializer_mode
         self._bits_per_symbol: int = bits_per_symbol
-        self._payload: Optional[T] = None
+        self._payload: Optional[Payload] = None
         self._serialized_payload: SerializedPayload = SerializedPayload([])
         self._symbol_index = 0
 
@@ -26,5 +24,5 @@ class Serializer(ABC, Generic[T]):
         self._symbol_index = 0
 
     @abstractmethod
-    def load_payload(self, payload: T) -> None:
+    def load_payload(self, payload: Payload) -> None:
         pass

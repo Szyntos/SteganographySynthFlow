@@ -1,12 +1,12 @@
-from Payload import TextPayload
+from Payload import Payload
 from Payload.SerializedPayload import SerializedPayload
 from SerializerMode import SerializerMode
 from .Deserializer import Deserializer
 
 
-class TextDeserializer(Deserializer[TextPayload]):
+class TextDeserializer(Deserializer):
     def __init__(self, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
         super().__init__(serializer_mode, bits_per_symbol)
 
-    def deserialize_payload(self, serialized_payload: SerializedPayload) -> TextPayload:
+    def deserialize_payload(self, serialized_payload: SerializedPayload) -> Payload:
         pass

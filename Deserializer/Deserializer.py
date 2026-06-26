@@ -1,14 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar
 
+from Payload import Payload
 from Payload.SerializedPayload import SerializedPayload
-from Payload.Payload import Payload
 from SerializerMode import SerializerMode
 
-T = TypeVar('T', bound=Payload)
-
-
-class Deserializer(ABC, Generic[T]):
+class Deserializer(ABC):
     def __init__(self, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
         self._serializer_mode: SerializerMode = serializer_mode
         self._bits_per_symbol: int = bits_per_symbol
@@ -20,5 +16,5 @@ class Deserializer(ABC, Generic[T]):
         self._serializer_mode = serializer_mode
 
     @abstractmethod
-    def deserialize_payload(self, serialized_payload: SerializedPayload) -> T:
+    def deserialize_payload(self, serialized_payload: SerializedPayload) -> Payload:
         pass

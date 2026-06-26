@@ -1,12 +1,12 @@
-from Payload import ImagePayload
+from Payload import Payload, ImagePayload
 from Payload.SerializedPayload import SerializedPayload
 from SerializerMode import SerializerMode
 from .Deserializer import Deserializer
 
 
-class ImageDeserializer(Deserializer[ImagePayload]):
+class ImageDeserializer(Deserializer):
     def __init__(self, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
         super().__init__(serializer_mode, bits_per_symbol)
 
-    def deserialize_payload(self, serialized_payload: SerializedPayload) -> ImagePayload:
-        return ImagePayload(serialized_payload.get_size())
+    def deserialize_payload(self, serialized_payload: SerializedPayload) -> Payload:
+        return ImagePayload()

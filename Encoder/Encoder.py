@@ -1,11 +1,9 @@
 from AudioChunk import AudioChunk
-from Codec.EncoderCodec import EncoderCodec
 from .EncodingStrategy import EncodingStrategy
 
 
 class Encoder:
-    def __init__(self, codec: EncoderCodec, encoding_strategy: EncodingStrategy):
-        self._codec = codec
+    def __init__(self, encoding_strategy: EncodingStrategy):
         self._encoding_strategy = encoding_strategy
 
     def set_encoding_strategy(self, encoding_strategy: EncodingStrategy) -> None:
