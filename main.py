@@ -5,9 +5,8 @@ from Framing import FramingSyncController
 from MidiInput import MidiInput
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Payload import AudioPayload
-from Serializer import Serializer, AudioSerializer
 from SerializerMode import SerializerMode
-from Sink import SinkBehaviour, AudioSink
+from Sink import SinkBehaviour
 
 
 def main():
@@ -18,10 +17,13 @@ def main():
     bits_per_symbol: int = 2
 
     encoder_codec = AudioEncoderCodec(SerializerMode.DIGITAL, bits_per_symbol)
-    encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(additive_wave_generator_encoding)
+
+    encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(
+        additive_wave_generator_encoding, encoder_codec.serializer()
+    )
+    encoding_strategy.load_payload(AudioPayload())
 
     encoder: Encoder = Encoder(encoder_codec, encoding_strategy)
-    encoder.set_payload(AudioPayload())
 
 
     additive_wave_generator_decoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
