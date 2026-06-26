@@ -1,19 +1,16 @@
-from Data import Data
+from typing import List
+
 from abc import ABC, abstractmethod
 
 
 class Payload(ABC):
-    def __init__(self, size: int):
-        self._size: int = size
+    def __init__(self):
+        self._data: List[float] = []
 
     @abstractmethod
-    def set_data(self, data: Data):
+    def load_from_file(self, file_path: str):
         pass
 
     @abstractmethod
-    def get_data(self) -> Data:
-        pass
-
-    @abstractmethod
-    def get_size(self):
+    def get_data(self) -> List[float]:
         pass

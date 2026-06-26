@@ -9,4 +9,4 @@ class AudioDeserializer(Deserializer[AudioPayload]):
         super().__init__(serializer_mode, bits_per_symbol)
 
     def deserialize_payload(self, serialized_payload: SerializedPayload) -> AudioPayload:
-        return AudioPayload(serialized_payload.get_size())
+        return AudioPayload()

@@ -16,7 +16,6 @@ class Encoder:
         self._encoding_strategy = encoding_strategy
         self._f0 = 440.0
         self._payload: Payload | None = None
-        self._serialized_payload = SerializedPayload([])
 
         self._encoding_strategy.set_f0(self._f0)
 
@@ -26,18 +25,15 @@ class Encoder:
     def set_codec(self, codec: EncoderCodec) -> None:
         self._codec = codec
         if self._payload is not None:
-            self._serialized_payload = self._codec.serializer().serialize_payload(self._payload)
-            self._encoding_strategy.set_serialized_payload(self._serialized_payload)
+            self._codec.serializer().load_payload(self._payload)
 
     def set_payload(self, payload: Payload) -> None:
         self._payload = payload
-        self._serialized_payload = self._codec.serializer().serialize_payload(payload)
-        self._encoding_strategy.set_serialized_payload(self._serialized_payload)
+        self._codec.serializer().load_payload(payload)
 
     def set_encoding_strategy(self, encoding_strategy: EncodingStrategy) -> None:
         self._encoding_strategy = encoding_strategy
         self._encoding_strategy.set_f0(self._f0)
-        self._encoding_strategy.set_serialized_payload(self._serialized_payload)
 
     def set_f0(self, f0: float) -> None:
         self._f0 = f0

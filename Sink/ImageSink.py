@@ -1,22 +1,22 @@
 from typing import List
 
-from Data import Image
-from Payload import ImagePayload
+from Framing import FramingSyncController
+from Payload import ImagePayload, SymbolRow
 from . import SinkBehaviour
 from .Sink import Sink
 
 
 class ImageSink(Sink[ImagePayload]):
-    def __init__(self, sink_behaviour: SinkBehaviour):
-        super().__init__(sink_behaviour)
-        self._images: List[Image] = []
-        self._spare_payloads: List[ImagePayload] = []
+    def __init__(self, framing_sync_controller: FramingSyncController, sink_behaviour: SinkBehaviour):
+        super().__init__(framing_sync_controller, sink_behaviour)
+        self._images: List[ImagePayload] = []
+        self._spare_symbols: List[SymbolRow] = []
 
-    def push(self, payload: ImagePayload) -> None:
+    def push(self, payload: SymbolRow) -> None:
         self.collect(payload)
 
-    def collect(self, payload: ImagePayload) -> None:
-        self._spare_payloads.append(payload)
+    def collect(self, payload: SymbolRow) -> None:
+        self._spare_symbols.append(payload)
         self.assemble()
 
     def assemble(self):

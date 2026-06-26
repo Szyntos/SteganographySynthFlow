@@ -1,24 +1,24 @@
 from typing import List
 
 from AudioChunk import AudioChunk
-from Data import Text
-from Payload import TextPayload
+from Framing import FramingSyncController
+from Payload import TextPayload, SymbolRow
 from .Sink import Sink
 from .SinkBehaviour import SinkBehaviour
 
 
 class TextSink(Sink[TextPayload]):
-    def __init__(self, sink_behaviour: SinkBehaviour):
-        super().__init__(sink_behaviour)
-        self._texts: List[Text] = []
-        self._spare_payloads: List[TextPayload] = []
+    def __init__(self, framing_sync_controller: FramingSyncController, sink_behaviour: SinkBehaviour):
+        super().__init__(framing_sync_controller, sink_behaviour)
+        self._texts: List[TextPayload] = []
+        self._spare_symbols: List[SymbolRow] = []
 
-    def push(self, payload: TextPayload) -> AudioChunk:
+    def push(self, payload: SymbolRow) -> AudioChunk:
         self.collect(payload)
-        return AudioChunk.silence(payload.)
+        return AudioChunk.silence(123)
 
-    def collect(self, payload: TextPayload) -> None:
-        self._spare_payloads.append(payload)
+    def collect(self, payload: SymbolRow) -> None:
+        self._spare_symbols.append(payload)
         self.assemble()
 
     def assemble(self):

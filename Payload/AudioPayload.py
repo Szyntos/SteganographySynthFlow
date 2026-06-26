@@ -1,16 +1,14 @@
-from Data import Data
+from typing import List
+import math
 from Payload import Payload
 
 
 class AudioPayload(Payload):
-    def __init__(self, size: int):
-        super().__init__(size)
+    def __init__(self):
+        super().__init__()
 
-    def set_data(self, data: Data):
+    def load_from_file(self, file_path: str):
         pass
 
-    def get_data(self) -> Data:
-        pass
-
-    def get_size(self):
-        return
+    def get_data(self) -> List[float]:
+        return [math.sin(i/200) + math.sin(i/400)  for i in range(1000)]

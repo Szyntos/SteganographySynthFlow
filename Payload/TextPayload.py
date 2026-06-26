@@ -1,14 +1,14 @@
-from Data import Data
+from typing import List
 
 from Payload import Payload
 
 
 class TextPayload(Payload):
-    def __init__(self, size: int):
-        super().__init__(size)
+    def __init__(self):
+        super().__init__()
 
-    def set_data(self, data: Data):
+    def load_from_file(self, file_path: str):
         pass
 
-    def get_data(self) -> Data:
+    def get_data(self) -> List[float]:
         pass
