@@ -1,11 +1,14 @@
 from abc import ABC, abstractmethod
+from typing import List
 
-from Payload import Payload, SymbolRow
-from Payload.SerializedPayload import SerializedPayload
+from Payload import SymbolRow
 from SerializerMode import SerializerMode
+from Sink import Sink
+
 
 class Deserializer(ABC):
-    def __init__(self, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
+    def __init__(self, sink: Sink, serializer_mode: SerializerMode, bits_per_symbol: int = 1):
+        self._sink: Sink = sink
         self._serializer_mode: SerializerMode = serializer_mode
         self._bits_per_symbol: int = bits_per_symbol
 
@@ -16,5 +19,5 @@ class Deserializer(ABC):
         self._serializer_mode = serializer_mode
 
     @abstractmethod
-    def deserialize_symbols(self, serialized_payload: SerializedPayload) -> SymbolRow:
+    def deserialize_symbols(self, symbols: List[SymbolRow]) -> None:
         pass

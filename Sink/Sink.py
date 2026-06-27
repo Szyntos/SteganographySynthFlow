@@ -1,7 +1,6 @@
 from abc import abstractmethod, ABC
 from typing import List
 
-from AudioChunk import AudioChunk
 from Framing import FramingSyncController
 from Payload import SymbolRow, Payload
 from Sink import SinkBehaviour
@@ -15,8 +14,9 @@ class Sink(ABC):
         self._spare_symbols: List[SymbolRow] = []
 
     @abstractmethod
-    def push(self, payload: SymbolRow) -> None:
+    def push(self, symbol_row: SymbolRow) -> None:
         pass
 
-    def get_audio_chunk(self, num_samples: int) -> AudioChunk:
-        return AudioChunk.silence(num_samples)
+    @abstractmethod
+    def push_many(self, symbol_rows: List[SymbolRow]) -> None:
+        pass

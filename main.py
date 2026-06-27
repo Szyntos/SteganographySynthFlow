@@ -29,19 +29,22 @@ def main():
     encoder: Encoder = Encoder(encoding_strategy)
 
 
+    max_driver_block_size = 4096
+
     additive_wave_generator_decoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
 
-    decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator_decoding)
+    decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator_decoding, num_rows)
 
     framing_sync_controller: FramingSyncController = FramingSyncController()
-    deserializer: Deserializer = AudioDeserializer(SerializerMode.DIGITAL, bits_per_symbol)
     sink: Sink = AudioSink(framing_sync_controller, SinkBehaviour.LIVE)
-    decoder: Decoder = Decoder(decoding_strategy, deserializer, sink)
+
+    deserializer: Deserializer = AudioDeserializer(sink, SerializerMode.DIGITAL, bits_per_symbol)
+    decoder: Decoder = Decoder(decoding_strategy, deserializer, sink, max_driver_block_size)
 
     midi_input.on_play(encoder.set_f0)
     midi_input.trigger(440.0)
 
-    num_samples = 5
+    num_samples = 20
 
     while True:
         encoded_frames = encoder.process(num_samples)
