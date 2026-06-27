@@ -17,10 +17,12 @@ def main():
 
     bits_per_symbol: int = 2
 
+    num_rows = 10
+
     serializer: Serializer = AudioSerializer(SerializerMode.DIGITAL, bits_per_symbol)
 
     encoding_strategy: EncodingStrategy = TwoSplitEncodingStrategy(
-        additive_wave_generator_encoding, serializer
+        additive_wave_generator_encoding, serializer, num_rows
     )
     encoding_strategy.load_payload(AudioPayload())
 

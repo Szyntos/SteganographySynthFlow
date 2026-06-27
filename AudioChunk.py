@@ -9,6 +9,9 @@ class AudioChunk:
     def silence(size: int) -> "AudioChunk":
         return AudioChunk([0.01] * size)
 
+    def get_samples(self) -> List[float]:
+        return self._samples
+
     def size(self) -> int:
         return len(self._samples)
 

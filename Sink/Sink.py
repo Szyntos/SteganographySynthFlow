@@ -15,5 +15,8 @@ class Sink(ABC):
         self._spare_symbols: List[SymbolRow] = []
 
     @abstractmethod
-    def push(self, payload: SymbolRow) -> AudioChunk:
+    def push(self, payload: SymbolRow) -> None:
         pass
+
+    def get_audio_chunk(self, num_samples: int) -> AudioChunk:
+        return AudioChunk.silence(num_samples)

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from Payload import Payload
+from Payload import Payload, SymbolRow
 from Payload.SerializedPayload import SerializedPayload
 from SerializerMode import SerializerMode
 
@@ -16,5 +16,5 @@ class Deserializer(ABC):
         self._serializer_mode = serializer_mode
 
     @abstractmethod
-    def deserialize_payload(self, serialized_payload: SerializedPayload) -> Payload:
+    def deserialize_symbols(self, serialized_payload: SerializedPayload) -> SymbolRow:
         pass

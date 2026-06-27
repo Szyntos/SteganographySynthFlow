@@ -11,9 +11,8 @@ class TextSink(Sink):
     def __init__(self, framing_sync_controller: FramingSyncController, sink_behaviour: SinkBehaviour):
         super().__init__(framing_sync_controller, sink_behaviour)
 
-    def push(self, payload: SymbolRow) -> AudioChunk:
+    def push(self, payload: SymbolRow) -> None:
         self.collect(payload)
-        return AudioChunk.silence(123)
 
     def collect(self, payload: SymbolRow) -> None:
         self._spare_symbols.append(payload)

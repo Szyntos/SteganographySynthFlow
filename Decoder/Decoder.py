@@ -1,4 +1,5 @@
 from AudioChunk import AudioChunk
+from AudioChunkSink import AudioChunkSink
 from Deserializer import Deserializer
 from Sink import Sink
 from .DecodingStrategy import DecodingStrategy
@@ -17,5 +18,6 @@ class Decoder:
 
     def process(self, input_samples: AudioChunk, num_samples: int) -> AudioChunk:
         serialized = self._decoding_strategy.decode_samples(input_samples, num_samples)
-        payload = self._deserializer.deserialize_payload(serialized)
-        return self._sink.push(payload)
+        payload = self._deserializer.deserialize_symbols(serialized)
+        self._sink.push(payload)
+        return self._sink.get_audio_chunk(num_samples)
