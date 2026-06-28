@@ -1,9 +1,8 @@
+from abc import ABC, abstractmethod
 from typing import List
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
-from abc import ABC, abstractmethod
-
 from Payload import SymbolRow
 from SamplesFifo import SamplesFifo
 

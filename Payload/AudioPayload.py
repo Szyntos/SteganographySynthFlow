@@ -1,5 +1,6 @@
-from typing import List
 import math
+from typing import List
+
 from Payload import Payload
 
 
@@ -11,4 +12,4 @@ class AudioPayload(Payload):
         pass
 
     def get_data(self) -> List[float]:
-        return [math.sin(i/200) + math.sin(i/400)  for i in range(1000)]
+        return [math.sin(i / 200) + math.sin(i / 400) for i in range(1000)]

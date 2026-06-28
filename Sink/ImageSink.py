@@ -1,8 +1,7 @@
 from typing import List
 
-from AudioChunk import AudioChunk
 from Framing import FramingSyncController
-from Payload import Payload, SymbolRow
+from Payload import SymbolRow
 from . import SinkBehaviour
 from .Sink import Sink
 

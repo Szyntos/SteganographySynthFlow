@@ -1,7 +1,6 @@
 from typing import List
 
-from Payload import Payload, SymbolRow
-from Payload.SerializedPayload import SerializedPayload
+from Payload import SymbolRow
 from SerializerMode import SerializerMode
 from Sink import Sink
 from .Deserializer import Deserializer

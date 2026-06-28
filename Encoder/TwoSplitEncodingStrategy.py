@@ -14,4 +14,4 @@ class TwoSplitEncodingStrategy(EncodingStrategy):
             # encode num_rows onto the AudioChunk
             pass
 
-        return AudioChunk([i**3 for i in range(num_samples)])
+        return AudioChunk([i ** 3 for i in range(num_samples)])

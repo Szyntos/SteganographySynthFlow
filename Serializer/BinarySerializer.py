@@ -15,5 +15,5 @@ class BinarySerializer(Serializer):
     def load_payload(self, payload: Payload) -> None:
         self._payload = payload
         frame_start: List[float] = self._frame_generator.get_start()
-        frame_end:   List[float] = self._frame_generator.get_end()
+        frame_end: List[float] = self._frame_generator.get_end()
         self._serialized_payload = SerializedPayload(frame_start + self._payload.get_data() + frame_end)

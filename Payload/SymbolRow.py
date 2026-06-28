@@ -1,7 +1,5 @@
 from typing import List
 
-from AudioChunk import AudioChunk
-
 
 class SymbolRow:
     def __init__(self, offsets: List[float]):
@@ -39,8 +37,8 @@ class SymbolRow:
             t = pos - left
 
             value = (
-                self._offsets[left] * (1.0 - t)
-                + self._offsets[right] * t
+                    self._offsets[left] * (1.0 - t)
+                    + self._offsets[right] * t
             )
             result.append(value)
 

@@ -1,4 +1,3 @@
-import math
 from typing import List
 
 from Framing import FramingSyncController

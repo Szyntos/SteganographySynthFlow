@@ -1,7 +1,6 @@
 from typing import List
 
-from Payload import Payload, ImagePayload, SymbolRow
-from Payload.SerializedPayload import SerializedPayload
+from Payload import SymbolRow
 from SerializerMode import SerializerMode
 from Sink import Sink
 from .Deserializer import Deserializer
@@ -12,4 +11,4 @@ class ImageDeserializer(Deserializer):
         super().__init__(sink, serializer_mode, bits_per_symbol)
 
     def deserialize_symbols(self, symbols: List[SymbolRow]) -> None:
-        return SymbolRow(serialized_payload.get_offsets())
+        self._sink.push_many(symbols)

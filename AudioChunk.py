@@ -7,7 +7,7 @@ class AudioChunk:
 
     @staticmethod
     def silence(size: int) -> "AudioChunk":
-        return AudioChunk([0.01] * size)
+        return AudioChunk([0.0] * size)
 
     def get_samples(self) -> List[float]:
         return self._samples
