@@ -74,7 +74,16 @@ def get_expected_decoded_signal(payload: AudioPayload, settings: Settings, num_s
 def graph_encoded_and_decoded(encoded, decoded, expected, startup_lag):
     import matplotlib.pyplot as plt
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    diff_x = list(range(startup_lag, startup_lag + len(expected)))
+    decoded_aligned = decoded[startup_lag: startup_lag + len(expected)]
+    diff = [d - e for d, e in zip(decoded_aligned, expected)]
+    diff_arr = np.array(diff)
+    diff_dc_removed = diff_arr - diff_arr.mean()
+
+    np.savetxt("diff_decoded_minus_expected.csv", diff_arr, delimiter=",", header="diff_decoded_minus_expected")
+    np.savetxt("diff_dc_removed.csv", diff_dc_removed, delimiter=",", header="diff_dc_removed")
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
 
     ax1.plot(encoded)
     ax1.set_title("Encoded")
@@ -85,8 +94,13 @@ def graph_encoded_and_decoded(encoded, decoded, expected, startup_lag):
     ax2.axvline(x=startup_lag, color='r', linestyle='--', alpha=0.5, label=f"Startup lag ({startup_lag} samples)")
     ax2.set_title("Decoded")
     ax2.set_ylabel("Amplitude")
-    ax2.set_xlabel("Sample index")
     ax2.legend()
+
+    ax3.plot(diff_x, diff, color='purple')
+    ax3.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+    ax3.set_title("Diff (Decoded − Expected)")
+    ax3.set_ylabel("Amplitude")
+    ax3.set_xlabel("Sample index")
 
     plt.tight_layout()
     plt.show()
@@ -124,11 +138,13 @@ def main():
     num_samples = settings.audio_driver_polling_rate
     encoded = []
     decoded = []
-    for i in range(15):
+    for i in range(80 * 2):
         encoded_frames = encoder.process(num_samples)
         encoded += encoded_frames.get_samples()
         decoded_frames = decoder.process(encoded_frames, num_samples)
         decoded += decoded_frames.get_samples()
+
+    print(decoded)
     startup_lag = compute_startup_lag(settings, num_samples)
     expected = get_expected_decoded_signal(payload, settings, len(decoded) - startup_lag)
     graph_encoded_and_decoded(encoded, decoded, expected, startup_lag)

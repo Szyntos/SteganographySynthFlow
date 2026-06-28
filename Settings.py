@@ -3,11 +3,11 @@ import math
 class Settings:
     def __init__(self):
         self.fs_out     = 48_000
-        self.chunk_size = 480
+        self.chunk_size = 480 * 2
 
-        self.audio_driver_polling_rate = 512
+        self.audio_driver_polling_rate = 30
 
-        self.max_driver_block_size = 512
+        self.max_driver_block_size = 30
 
         self.total_harmonics = 50
         self.data_harmonics  = 40
