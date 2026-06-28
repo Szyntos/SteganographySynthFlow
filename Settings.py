@@ -7,7 +7,7 @@ class Settings:
 
         self.audio_driver_polling_rate = 512
 
-        self.max_driver_block_size = 4096
+        self.max_driver_block_size = 512
 
         self.total_harmonics = 50
         self.data_harmonics  = 40

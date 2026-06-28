@@ -54,14 +54,9 @@ class AdditiveWaveGenerator:
         self._validate_state()
 
         sample: float = 0.0
-        amp_sum: float = sum(abs(amp) for amp in self._amps)
-
         for i in range(len(self._omegas)):
             sample += self._amps[i] * math.sin(self._phases[i])
             self._advance_phase(i, f0)
-
-        if amp_sum > 0.0:
-            sample /= amp_sum
 
         return sample
 
@@ -79,8 +74,6 @@ class AdditiveWaveGenerator:
             raise ValueError("amp_offsets length exceeds number of harmonics")
 
         sample: float = 0.0
-        amp_sum: float = sum(abs(amp) for amp in self._amps)
-
         for i in range(len(self._omegas)):
             phase: float = self._phases[i]
             if phase_offsets is not None and i < len(phase_offsets):
@@ -92,8 +85,5 @@ class AdditiveWaveGenerator:
 
             sample += amp * math.sin(phase)
             self._advance_phase(i, f0)
-
-        if amp_sum > 0.0:
-            sample /= amp_sum
 
         return sample
