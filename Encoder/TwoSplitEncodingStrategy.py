@@ -20,6 +20,14 @@ class TwoSplitEncodingStrategy(EncodingStrategy):
         self._phase_duration = self._internal_clock // self._phases
         self._current_row = None
 
+    def _get_phase_offsets(self) -> List[float]:
+        if self._current_row is None:
+            self._current_row = self._serializer.get_symbol_row(self._num_rows)
+        raw: List[float] = self._current_row.get_offsets()
+        data_offset: int = self._settings.data_offset
+        padded: List[float] = [0.0] * data_offset + raw
+        return padded
+
     def generate_samples(self, num_samples: int) -> AudioChunk:
         result: List[float] = []
         for sample in range(num_samples):
@@ -27,9 +35,9 @@ class TwoSplitEncodingStrategy(EncodingStrategy):
                 self._current_row = None
                 result.append(self._additive_wave_generator.generate_next(self._f0))
             else:
-                if self._current_row is None:
-                    self._current_row = self._serializer.get_symbol_row(self._num_rows)
-                result.append(self._additive_wave_generator.generate_next_with_offsets(self._f0, self._current_row))
+                result.append(self._additive_wave_generator.generate_next_with_offsets(
+                    self._f0, phase_offsets=self._get_phase_offsets()
+                ))
 
             self._clock_position = (self._clock_position + 1) % self._internal_clock
 

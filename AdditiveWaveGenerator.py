@@ -1,7 +1,6 @@
 import math
-from typing import List
+from typing import List, Optional
 
-from Payload import SymbolRow
 from Settings import Settings
 
 
@@ -66,27 +65,32 @@ class AdditiveWaveGenerator:
 
         return sample
 
-    def generate_next_with_offsets(self, f0: float, symbol_row: SymbolRow) -> float:
+    def generate_next_with_offsets(
+        self,
+        f0: float,
+        phase_offsets: Optional[List[float]] = None,
+        amp_offsets: Optional[List[float]] = None,
+    ) -> float:
         self._validate_state()
 
-        offsets: List[float] = symbol_row.get_offsets()
-
-        if len(offsets) > len(self._omegas):
-            raise ValueError("SymbolRow contains more offsets than there are harmonics")
+        if phase_offsets is not None and len(phase_offsets) > len(self._omegas):
+            raise ValueError("phase_offsets length exceeds number of harmonics")
+        if amp_offsets is not None and len(amp_offsets) > len(self._omegas):
+            raise ValueError("amp_offsets length exceeds number of harmonics")
 
         sample: float = 0.0
         amp_sum: float = sum(abs(amp) for amp in self._amps)
 
-        first_offset_harmonic: int = len(self._omegas) - len(offsets)
-
         for i in range(len(self._omegas)):
             phase: float = self._phases[i]
+            if phase_offsets is not None and i < len(phase_offsets):
+                phase += phase_offsets[i] * self._phase_offset_range
 
-            if i >= first_offset_harmonic:
-                offset_index: int = i - first_offset_harmonic
-                phase += offsets[offset_index] * self._phase_offset_range
+            amp: float = self._amps[i]
+            if amp_offsets is not None and i < len(amp_offsets):
+                amp += amp_offsets[i]
 
-            sample += self._amps[i] * math.sin(phase)
+            sample += amp * math.sin(phase)
             self._advance_phase(i, f0)
 
         if amp_sum > 0.0:
