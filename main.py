@@ -1,3 +1,5 @@
+import math
+
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
 from Deserializer import Deserializer, AudioDeserializer
@@ -9,12 +11,29 @@ from Serializer import AudioSerializer, Serializer
 from SerializerMode import SerializerMode
 from Sink import SinkBehaviour, AudioSink, Sink
 
+def sawtooth(num_harmonics: int) -> AdditiveWaveGenerator:
+    additive_wave_generator: AdditiveWaveGenerator = AdditiveWaveGenerator()
+
+    num_harmonics = 50
+    # sawtooth
+    additive_wave_generator.set_omegas(
+        [2.0 * math.pi * (i + 1) for i in range(num_harmonics)]
+    )
+
+    additive_wave_generator.set_phases(
+        [0.0] * num_harmonics
+    )
+
+    additive_wave_generator.set_amps(
+        [(2.0 / math.pi) * ((-1) ** i) / (i + 1) for i in range(num_harmonics)]
+    )
+    return additive_wave_generator
+
 
 def main():
     midi_input: MidiInput = MidiInput()
 
-    additive_wave_generator_encoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
-
+    additive_wave_generator_encoding: AdditiveWaveGenerator = sawtooth(50)
     bits_per_symbol: int = 2
 
     num_rows = 40
@@ -30,7 +49,7 @@ def main():
 
     max_driver_block_size = 4096
 
-    additive_wave_generator_decoding: AdditiveWaveGenerator = AdditiveWaveGenerator()
+    additive_wave_generator_decoding: AdditiveWaveGenerator = sawtooth(50)
 
     decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(additive_wave_generator_decoding, num_rows)
 
