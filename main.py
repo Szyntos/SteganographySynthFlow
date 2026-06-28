@@ -49,6 +49,7 @@ def main():
     midi_input: MidiInput = MidiInput()
 
     payload: Payload = AudioPayload()
+    payload.load_from_file(r"assets/sinesweep.wav")
 
     serializer: Serializer = AudioSerializer(settings, SerializerMode.DIGITAL)
 

@@ -1,3 +1,4 @@
+import math
 from typing import List
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
@@ -12,4 +13,4 @@ class TwoSplitDecodingStrategy(DecodingStrategy):
 
     def _decode(self, samples: List[float]) -> SymbolRow:
         step: int = self._internal_clock // self._num_rows
-        return SymbolRow([samples[i * step] for i in range(self._num_rows)])
+        return SymbolRow([samples[i * step] * math.sin(i/100) for i in range(self._num_rows)])
