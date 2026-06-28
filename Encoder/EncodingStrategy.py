@@ -4,19 +4,24 @@ from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Payload.Payload import Payload
 from Serializer import Serializer
+from Settings import Settings
 
 
 class EncodingStrategy(ABC):
-    def __init__(self, additive_wave_generator: AdditiveWaveGenerator, serializer: Serializer, num_rows: int):
+    def __init__(self, settings: Settings, additive_wave_generator: AdditiveWaveGenerator, serializer: Serializer):
+        self._settings = settings
         self._additive_wave_generator: AdditiveWaveGenerator = additive_wave_generator
         self._serializer: Serializer = serializer
-        self._num_rows: int = num_rows
+        self._num_rows: int = 0
+        self._internal_clock: int = 0
         self._f0: float = 0.0
-        self._internal_clock = 1
         self._clock_position = 0
+        self.reconfigure()
 
-    def set_num_rows(self, num_rows: int):
-        self._num_rows = num_rows
+    def reconfigure(self) -> None:
+        self._num_rows = self._settings.data_harmonics
+        self._internal_clock = self._settings.chunk_size
+        self._clock_position = 0
 
     def load_payload(self, payload: Payload) -> None:
         self._serializer.load_payload(payload)

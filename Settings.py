@@ -3,13 +3,17 @@ import math
 class Settings:
     def __init__(self):
         self.fs_out     = 48_000
-        self.chunk_size = 480 * 2
+        self.chunk_size = 480
+
+        self.audio_driver_polling_rate = 512
+
+        self.max_driver_block_size = 4096
 
         self.total_harmonics = 50
         self.data_harmonics  = 40
         self.data_offset     = 1
 
-        self.phase_range = math.pi / 8.0
+        self.phase_range = math.pi / 8
 
         self.base_amplitude = 0.9
 
@@ -42,7 +46,7 @@ class Settings:
         self.MSG_FS = (self.data_harmonics * self.fs_out) / self.chunk_size
 
     def validate(self):
-        if self.chunk_size % 2 == 0:
+        if self.chunk_size % 2 != 0:
             print("chunk_size must be even")
-        if self.data_offset + self.data_harmonics <= self.total_harmonics:
+        if self.data_offset + self.data_harmonics > self.total_harmonics:
             print("Data harmonics exceed available spectrum")

@@ -5,14 +5,21 @@ from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Payload import SymbolRow
 from SamplesFifo import SamplesFifo
+from Settings import Settings
 
 
 class DecodingStrategy(ABC):
-    def __init__(self, additive_wave_generator: AdditiveWaveGenerator, num_rows: int):
+    def __init__(self, settings: Settings, additive_wave_generator: AdditiveWaveGenerator):
+        self._settings = settings
         self._additive_wave_generator: AdditiveWaveGenerator = additive_wave_generator
-        self._internal_clock: int = 1
-        self._num_rows: int = num_rows
+        self._internal_clock: int = 0
+        self._num_rows: int = 0
         self._audio_chunk_input_fifo: SamplesFifo = SamplesFifo()
+        self.reconfigure()
+
+    def reconfigure(self) -> None:
+        self._num_rows = self._settings.data_harmonics
+        self._internal_clock = self._settings.chunk_size
 
     def set_additive_wave_generator(self, additive_wave_generator: AdditiveWaveGenerator):
         self._additive_wave_generator = additive_wave_generator
@@ -27,7 +34,6 @@ class DecodingStrategy(ABC):
 
         while self._audio_chunk_input_fifo.can_read(self._internal_clock):
             to_decode: List[float] = self._audio_chunk_input_fifo.pop_or_empty(self._internal_clock)
-            # now we have enough samples to decode the data from the audio_chunk
             decoded_symbols.append(self._decode(to_decode))
         return decoded_symbols
 
