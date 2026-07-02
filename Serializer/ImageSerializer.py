@@ -11,7 +11,7 @@ from .Serializer import Serializer
 class ImageSerializer(Serializer):
     def __init__(self, settings: Settings, serializer_mode: SerializerMode):
         super().__init__(settings, serializer_mode)
-        self._frame_generator: FrameGenerator = FrameGenerator()
+        self._frame_generator: FrameGenerator = FrameGenerator(self._settings)
 
     def load_payload(self, payload: Payload) -> None:
         self._payload = payload

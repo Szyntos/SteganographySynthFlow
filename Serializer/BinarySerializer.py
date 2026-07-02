@@ -11,10 +11,10 @@ from .Serializer import Serializer
 class BinarySerializer(Serializer):
     def __init__(self, settings: Settings, serializer_mode: SerializerMode):
         super().__init__(settings, serializer_mode)
-        self._frame_generator: FrameGenerator = FrameGenerator()
+        self._frame_generator: FrameGenerator = FrameGenerator(self._settings)
 
     def load_payload(self, payload: Payload) -> None:
         self._payload = payload
-        frame_start: List[float] = self._frame_generator.get_start()
-        frame_end: List[float] = self._frame_generator.get_end()
+        frame_start: List[int] = self._frame_generator.get_start()
+        frame_end: List[int] = self._frame_generator.get_end()
         self._serialized_payload = SerializedPayload(frame_start + self._payload.get_data() + frame_end)
