@@ -38,8 +38,12 @@ class TwoSplitDecodingStrategy(DecodingStrategy):
         # leakage that otherwise biases the phase measurement when f0*half/fs is
         # non-integer (e.g. f0=500, half=240, fs=48000 → 2.5 cycles, not integer).
         cycles_per_period = max(1, int(round(fs / self._f0)))
-        n_cycles = max(1, half // cycles_per_period)
-        analysis_len = n_cycles * cycles_per_period
+        n_cycles = half // cycles_per_period
+        if n_cycles < 1:
+            # f0 too low to fit even one cycle in half; use all available samples
+            analysis_len = half
+        else:
+            analysis_len = n_cycles * cycles_per_period
         win_start = (half - analysis_len) // 2  # centre window in each half
 
         n = np.arange(analysis_len, dtype=np.float64)

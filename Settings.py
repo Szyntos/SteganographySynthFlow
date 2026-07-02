@@ -2,48 +2,48 @@ import math
 
 class Settings:
     def __init__(self):
-        self.fs_out     = 48_000
-        self.chunk_size = 480
+        self.fs_out: int     = 48_000
+        self.chunk_size: int = 480
 
-        self.audio_driver_polling_rate = 30
+        self.audio_driver_polling_rate: int = 512
 
-        self.max_driver_block_size = 30
+        self.max_driver_block_size: int = 512
 
-        self.total_harmonics = 50
-        self.data_harmonics  = 30
-        self.data_offset     = 10
+        self.total_harmonics: int = 50
+        self.data_harmonics: int  = 49
+        self.data_offset: int     = 1
 
-        self.phase_range = math.pi / 8
+        self.phase_range: float = math.pi / 8
 
-        self.base_amplitude = 0.9
+        self.base_amplitude: float = 0.9
 
-        self.bits_per_symbol = 2
-        self.bits_per_chunk  = self.data_harmonics * self.bits_per_symbol
-        self.bytes_per_chunk = self.bits_per_chunk / 8
-
-
-        self.pilot_size = self.chunk_size / 2
-        self.data_size  = self.chunk_size / 2
+        self.bits_per_symbol: int = 2
+        self.bits_per_chunk: int  = self.data_harmonics * self.bits_per_symbol
+        self.bytes_per_chunk: int = self.bits_per_chunk // 8
 
 
-        self.sync_chunk_length = 12
-        self.sync_window       = 12
-        self.sync_min_match    = 9
+        self.pilot_size: int = self.chunk_size // 2
+        self.data_size: int  = self.chunk_size // 2
 
-        self.sync_fuzzy_max_bit_errors_frac = 0.08
-        self.sync_data_diff_frac            = 0.35
 
-        self.sync_msg_start = "START_SYNC_START"
-        self.sync_msg_end   = "END_SYNC_END"
+        self.sync_chunk_length: int = 12
+        self.sync_window: int       = 12
+        self.sync_min_match: int    = 9
 
-        self.modulator_wav_path = "assets/idk47.wav"
-        self.image_path = "assets/test.png"
-        self.image_target_w = 40
-        self.image_target_h = 40
-        self.image_channels = 3
-        self.image_mode = "live"
+        self.sync_fuzzy_max_bit_errors_frac: float = 0.08
+        self.sync_data_diff_frac: float            = 0.35
 
-        self.MSG_FS = (self.data_harmonics * self.fs_out) / self.chunk_size
+        self.sync_msg_start: str = "START_SYNC_START"
+        self.sync_msg_end: str   = "END_SYNC_END"
+
+        self.modulator_wav_path: str = r"assets/SpoilerTalkTheLightHouse.wav"
+        self.image_path: str = "assets/test.png"
+        self.image_target_w: int = 40
+        self.image_target_h: int = 40
+        self.image_channels: int = 3
+        self.image_mode: str = "live"
+
+        self.MSG_FS: int = (self.data_harmonics * self.fs_out) // self.chunk_size
 
     def validate(self):
         if self.chunk_size % 2 != 0:
