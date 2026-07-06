@@ -26,6 +26,12 @@ class EncodingStrategy(ABC):
     def load_payload(self, payload: Payload) -> None:
         self._serializer.load_payload(payload)
 
+    def get_position_fraction(self) -> float:
+        return self._serializer.get_position_fraction()
+
+    def set_position_fraction(self, fraction: float) -> None:
+        self._serializer.set_position_fraction(fraction)
+
     def set_additive_wave_generator(self, additive_wave_generator: AdditiveWaveGenerator):
         self._additive_wave_generator = additive_wave_generator
 

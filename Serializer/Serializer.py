@@ -37,6 +37,19 @@ class Serializer(ABC):
     def reset_loop(self) -> None:
         self._symbol_index = 0
 
+    def get_position_fraction(self) -> float:
+        size = self._serialized_payload.get_size()
+        if size == 0:
+            return 0.0
+        return (self._symbol_index % size) / size
+
+    def set_position_fraction(self, fraction: float) -> None:
+        size = self._serialized_payload.get_size()
+        if size == 0:
+            return
+        fraction = min(max(fraction, 0.0), 1.0)
+        self._symbol_index = int(fraction * size) % size
+
     @abstractmethod
     def load_payload(self, payload: Payload) -> None:
         pass

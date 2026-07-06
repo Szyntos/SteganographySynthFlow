@@ -1,6 +1,7 @@
+import os
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import filedialog, ttk, messagebox
 
 import numpy as np
 
@@ -42,11 +43,11 @@ class AudioEngine:
         payload.load_from_file(settings.modulator_wav_path)
 
         serializer = AudioSerializer(settings, SerializerMode.DIGITAL)
-        enc_strategy = TwoSplitEncodingStrategy(
+        self._enc_strategy = TwoSplitEncodingStrategy(
             settings, _make_harmonic_generator(settings), serializer
         )
-        enc_strategy.load_payload(payload)
-        self._encoder = Encoder(enc_strategy)
+        self._enc_strategy.load_payload(payload)
+        self._encoder = Encoder(self._enc_strategy)
 
         self._dec_strategy = TwoSplitDecodingStrategy(settings, _make_harmonic_generator(settings))
         sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE)
@@ -60,6 +61,20 @@ class AudioEngine:
 
     def set_source(self, source: str) -> None:
         self._source = source
+
+    def load_payload_file(self, file_path: str) -> None:
+        payload = AudioPayload()
+        payload.load_from_file(file_path)
+        with self._lock:
+            self._enc_strategy.load_payload(payload)
+
+    def get_position_fraction(self) -> float:
+        with self._lock:
+            return self._enc_strategy.get_position_fraction()
+
+    def set_position_fraction(self, fraction: float) -> None:
+        with self._lock:
+            self._enc_strategy.set_position_fraction(fraction)
 
     def set_f0(self, f0: float) -> None:
         self._encoder.set_f0(f0)
@@ -112,6 +127,7 @@ class App(tk.Tk):
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._poll_position()
 
     def _build_ui(self) -> None:
         pad = {"padx": 16, "pady": 6}
@@ -130,9 +146,32 @@ class App(tk.Tk):
         self._toggle_btn = ttk.Button(self, text="▶  Start", command=self._toggle, width=14)
         self._toggle_btn.grid(row=1, column=0, **pad)
 
+        # ── audio payload ────────────────────────────────────────────────────
+        payload_frame = ttk.LabelFrame(self, text="Audio Payload", padding=8)
+        payload_frame.grid(row=2, column=0, sticky="ew", **pad)
+        payload_frame.columnconfigure(0, weight=1)
+
+        self._payload_var = tk.StringVar(
+            value=os.path.basename(self._engine._settings.modulator_wav_path)
+        )
+        ttk.Label(payload_frame, textvariable=self._payload_var, anchor="w").grid(
+            row=0, column=0, sticky="ew", padx=(0, 8)
+        )
+        ttk.Button(payload_frame, text="Browse...", command=self._on_pick_payload).grid(
+            row=0, column=1
+        )
+
+        self._payload_dragging = False
+        self._position_slider = ttk.Scale(
+            payload_frame, from_=0, to=1000, orient="horizontal", length=280,
+        )
+        self._position_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self._position_slider.bind("<ButtonPress-1>", self._on_position_drag_start)
+        self._position_slider.bind("<ButtonRelease-1>", self._on_position_drag_end)
+
         # ── output source ────────────────────────────────────────────────────
         src_frame = ttk.LabelFrame(self, text="Output Source", padding=8)
-        src_frame.grid(row=2, column=0, sticky="ew", **pad)
+        src_frame.grid(row=3, column=0, sticky="ew", **pad)
 
         self._source_var = tk.StringVar(value="encoder")
         ttk.Radiobutton(
@@ -146,7 +185,7 @@ class App(tk.Tk):
 
         # ── volume ───────────────────────────────────────────────────────────
         vol_frame = ttk.LabelFrame(self, text="Volume", padding=8)
-        vol_frame.grid(row=3, column=0, sticky="ew", **pad)
+        vol_frame.grid(row=4, column=0, sticky="ew", **pad)
 
         self._vol_label = ttk.Label(vol_frame, text="0 dB", width=6, anchor="e")
         self._vol_label.grid(row=0, column=1, padx=(6, 0))
@@ -161,7 +200,7 @@ class App(tk.Tk):
 
         # ── pitch ─────────────────────────────────────────────────────────────
         pitch_frame = ttk.LabelFrame(self, text="Pitch (Hz)", padding=8)
-        pitch_frame.grid(row=4, column=0, sticky="ew", **pad)
+        pitch_frame.grid(row=5, column=0, sticky="ew", **pad)
 
         self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
@@ -174,7 +213,7 @@ class App(tk.Tk):
         self._pitch_slider.grid(row=0, column=0)
 
         # ── bottom padding ────────────────────────────────────────────────────
-        ttk.Frame(self).grid(row=5, pady=6)
+        ttk.Frame(self).grid(row=6, pady=6)
 
     def _toggle(self) -> None:
         if self._running:
@@ -197,6 +236,37 @@ class App(tk.Tk):
         self._running = False
         self._status_var.set("Stopped")
         self._toggle_btn.configure(text="▶  Start")
+
+    def _on_pick_payload(self) -> None:
+        file_path = filedialog.askopenfilename(
+            title="Select audio payload",
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.flac *.ogg"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not file_path:
+            return
+        try:
+            self._engine.load_payload_file(file_path)
+        except Exception as exc:
+            messagebox.showerror("Payload Error", str(exc))
+            return
+        self._payload_var.set(os.path.basename(file_path))
+
+    def _on_position_drag_start(self, _event) -> None:
+        self._payload_dragging = True
+
+    def _on_position_drag_end(self, _event) -> None:
+        fraction = self._position_slider.get() / 1000.0
+        self._engine.set_position_fraction(fraction)
+        self._payload_dragging = False
+
+    def _poll_position(self) -> None:
+        if not self._payload_dragging:
+            fraction = self._engine.get_position_fraction()
+            self._position_slider.set(fraction * 1000.0)
+        self.after(100, self._poll_position)
 
     def _on_source_change(self) -> None:
         self._engine.set_source(self._source_var.get())
