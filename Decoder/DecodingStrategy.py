@@ -31,6 +31,9 @@ class DecodingStrategy(ABC):
     def get_internal_clock(self) -> int:
         return self._internal_clock
 
+    def get_input_fifo_size(self) -> int:
+        return self._audio_chunk_input_fifo.get_size()
+
     def decode_samples(self, input_samples: AudioChunk, num_samples: int) -> List[SymbolRow]:
         self._audio_chunk_input_fifo.push(input_samples.get_samples())
 

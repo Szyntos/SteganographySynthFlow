@@ -53,7 +53,7 @@ class AudioEngine:
         deserializer = AudioDeserializer(settings, sink, SerializerMode.DIGITAL)
         self._decoder = Decoder(settings, self._dec_strategy, deserializer)
 
-        self.set_f0(440.0)
+        self.set_f0(400.0)
 
     def set_volume(self, vol: float) -> None:
         self._volume = float(vol)
@@ -163,14 +163,14 @@ class App(tk.Tk):
         pitch_frame = ttk.LabelFrame(self, text="Pitch (Hz)", padding=8)
         pitch_frame.grid(row=4, column=0, sticky="ew", **pad)
 
-        self._pitch_label = ttk.Label(pitch_frame, text="440 Hz", width=7, anchor="e")
+        self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
 
         self._pitch_slider = ttk.Scale(
             pitch_frame, from_=self._F0_MIN, to=self._F0_MAX, orient="horizontal", length=280,
             command=self._on_pitch_change,
         )
-        self._pitch_slider.set(440)
+        self._pitch_slider.set(400)
         self._pitch_slider.grid(row=0, column=0)
 
         # ── bottom padding ────────────────────────────────────────────────────

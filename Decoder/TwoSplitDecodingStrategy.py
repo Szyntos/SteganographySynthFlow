@@ -15,23 +15,22 @@ class TwoSplitDecodingStrategy(DecodingStrategy):
         self._m_state: np.ndarray = np.zeros(0)
         self._alpha: float = 1.0
         self._mag_threshold: float = 1e-6
+        self._analysis_cache_f0: float | None = None
+        self._analysis_cache: tuple | None = None
         super().__init__(settings, additive_wave_generator)
 
     def reconfigure(self) -> None:
         super().reconfigure()
         self._m_state = np.zeros(self._num_rows)
+        self._analysis_cache_f0 = None
+        self._analysis_cache = None
 
-    def _decode(self, samples: List[float]) -> SymbolRow:
-        if self._f0 <= 0.0:
-            return SymbolRow(self._m_state.tolist())
+    def _get_analysis_arrays(self, fs: float, half: int):
+        if self._analysis_cache_f0 == self._f0 and self._analysis_cache is not None:
+            return self._analysis_cache
 
-        fs = float(self._settings.fs_out)
         total_harmonics = self._settings.total_harmonics
-        data_offset = self._settings.data_offset
-        data_harmonics = self._settings.data_harmonics
-        phase_range = float(self._settings.phase_range)
         nyquist = 0.5 * fs
-        half = self._internal_clock // 2
 
         # Use the largest integer-cycle window length that fits in half.
         # This ensures harmonics are mutually orthogonal, eliminating cross-harmonic
@@ -49,10 +48,6 @@ class TwoSplitDecodingStrategy(DecodingStrategy):
         n = np.arange(analysis_len, dtype=np.float64)
         hann_win = 0.5 - 0.5 * np.cos(2.0 * math.pi * n / (analysis_len - 1)) if analysis_len > 1 else np.ones(1)
 
-        samples_arr = np.asarray(samples, dtype=np.float64)
-        xp = samples_arr[win_start:win_start + analysis_len] * hann_win
-        xd = samples_arr[half + win_start:half + win_start + analysis_len] * hann_win
-
         t_p = n + win_start
         t_d = n + half + win_start
 
@@ -62,11 +57,36 @@ class TwoSplitDecodingStrategy(DecodingStrategy):
         valid_mask = (freqs > 0.0) & (freqs <= nyquist)
         omegas = np.where(valid_mask, 2.0 * math.pi * freqs / fs, 0.0)
 
-        # Vectorised DFT projections: (H, analysis_len) outer product
+        # Precompute the DFT projection matrices; these only depend on f0/fs/half.
         phase_p = np.outer(omegas, t_p)
         phase_d = np.outer(omegas, t_d)
-        Z_p = (xp * np.exp(-1j * phase_p)).sum(axis=1)
-        Z_d = (xd * np.exp(-1j * phase_d)).sum(axis=1)
+        proj_p = np.exp(-1j * phase_p)
+        proj_d = np.exp(-1j * phase_d)
+
+        self._analysis_cache_f0 = self._f0
+        self._analysis_cache = (analysis_len, win_start, hann_win, valid_mask, proj_p, proj_d)
+        return self._analysis_cache
+
+    def _decode(self, samples: List[float]) -> SymbolRow:
+        if self._f0 <= 0.0:
+            return SymbolRow(self._m_state.tolist())
+
+        fs = float(self._settings.fs_out)
+        data_offset = self._settings.data_offset
+        data_harmonics = self._settings.data_harmonics
+        phase_range = float(self._settings.phase_range)
+        total_harmonics = self._settings.total_harmonics
+        half = self._internal_clock // 2
+
+        analysis_len, win_start, hann_win, valid_mask, proj_p, proj_d = self._get_analysis_arrays(fs, half)
+
+        samples_arr = np.asarray(samples, dtype=np.float64)
+        xp = samples_arr[win_start:win_start + analysis_len] * hann_win
+        xd = samples_arr[half + win_start:half + win_start + analysis_len] * hann_win
+
+        # Vectorised DFT projections: (H, analysis_len) outer product, precomputed above
+        Z_p = (xp * proj_p).sum(axis=1)
+        Z_d = (xd * proj_d).sum(axis=1)
         Z_p = np.where(valid_mask, Z_p, 0j)
         Z_d = np.where(valid_mask, Z_d, 0j)
 

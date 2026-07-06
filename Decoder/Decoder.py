@@ -28,6 +28,9 @@ class Decoder:
             self._decoding_strategy.get_internal_clock() + self._max_driver_block_size - 1
         )
 
+    def get_output_fifo_size(self) -> int:
+        return self._audio_chunk_output_fifo.get_size()
+
     def process(self, input_samples: AudioChunk, num_samples: int) -> AudioChunk:
         decoded_symbols: List[SymbolRow] = self._decoding_strategy.decode_samples(input_samples, num_samples)
         for symbol_row in decoded_symbols:

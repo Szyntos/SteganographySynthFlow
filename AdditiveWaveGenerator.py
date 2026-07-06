@@ -1,6 +1,8 @@
 import math
 from typing import List, Optional
 
+import numpy as np
+
 from Settings import Settings
 
 
@@ -46,19 +48,8 @@ class AdditiveWaveGenerator:
         if len(self._omegas) != len(self._amps):
             raise ValueError("omegas and amps must have the same length")
 
-    def _advance_phase(self, i: int, f0: float) -> None:
-        self._phases[i] += 2.0 * math.pi * self._omegas[i] * f0 / self._sample_rate
-        self._phases[i] %= 2.0 * math.pi
-
     def generate_next(self, f0: float) -> float:
-        self._validate_state()
-
-        sample: float = 0.0
-        for i in range(len(self._omegas)):
-            sample += self._amps[i] * math.sin(self._phases[i])
-            self._advance_phase(i, f0)
-
-        return sample
+        return float(self.generate_block(f0, 1)[0])
 
     def generate_next_with_offsets(
         self,
@@ -66,6 +57,18 @@ class AdditiveWaveGenerator:
         phase_offsets: Optional[List[float]] = None,
         amp_offsets: Optional[List[float]] = None,
     ) -> float:
+        return float(self.generate_block_with_offsets(f0, 1, phase_offsets, amp_offsets)[0])
+
+    def generate_block(self, f0: float, n: int) -> np.ndarray:
+        return self.generate_block_with_offsets(f0, n)
+
+    def generate_block_with_offsets(
+        self,
+        f0: float,
+        n: int,
+        phase_offsets: Optional[List[float]] = None,
+        amp_offsets: Optional[List[float]] = None,
+    ) -> np.ndarray:
         self._validate_state()
 
         if phase_offsets is not None and len(phase_offsets) > len(self._omegas):
@@ -73,17 +76,38 @@ class AdditiveWaveGenerator:
         if amp_offsets is not None and len(amp_offsets) > len(self._omegas):
             raise ValueError("amp_offsets length exceeds number of harmonics")
 
-        sample: float = 0.0
-        for i in range(len(self._omegas)):
-            phase: float = self._phases[i]
-            if phase_offsets is not None and i < len(phase_offsets):
-                phase += phase_offsets[i] * self._phase_offset_range
+        if n <= 0:
+            return np.zeros(0, dtype=np.float64)
 
-            amp: float = self._amps[i]
-            if amp_offsets is not None and i < len(amp_offsets):
-                amp += amp_offsets[i]
+        omegas = np.asarray(self._omegas, dtype=np.float64)
+        phases = np.asarray(self._phases, dtype=np.float64)
+        amps = np.asarray(self._amps, dtype=np.float64)
+        num_harmonics = len(omegas)
 
-            sample += amp * math.sin(phase)
-            self._advance_phase(i, f0)
+        # Per-harmonic phase advance per sample tick.
+        deltas = 2.0 * math.pi * omegas * f0 / self._sample_rate
 
-        return sample
+        # phase_matrix[i, k] = phase of harmonic i at sample k (before offsets).
+        k = np.arange(n, dtype=np.float64)
+        phase_matrix = phases[:, None] + np.outer(deltas, k)
+
+        if phase_offsets is not None:
+            padded_phase_offsets = np.zeros(num_harmonics, dtype=np.float64)
+            padded_phase_offsets[:len(phase_offsets)] = phase_offsets
+            phase_matrix += (padded_phase_offsets * self._phase_offset_range)[:, None]
+
+        if amp_offsets is not None:
+            padded_amp_offsets = np.zeros(num_harmonics, dtype=np.float64)
+            padded_amp_offsets[:len(amp_offsets)] = amp_offsets
+            effective_amps = amps + padded_amp_offsets
+        else:
+            effective_amps = amps
+
+        samples = (effective_amps[:, None] * np.sin(phase_matrix)).sum(axis=0)
+
+        # Persistent carrier phase advances by n ticks, independent of the
+        # per-call offsets (offsets only affect the sample evaluation above).
+        new_phases = (phases + n * deltas) % (2.0 * math.pi)
+        self._phases = new_phases.tolist()
+
+        return samples

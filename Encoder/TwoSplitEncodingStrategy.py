@@ -30,15 +30,21 @@ class TwoSplitEncodingStrategy(EncodingStrategy):
 
     def generate_samples(self, num_samples: int) -> AudioChunk:
         result: List[float] = []
-        for sample in range(num_samples):
+        remaining = num_samples
+
+        while remaining > 0:
             if self._clock_position < self._phase_duration:
                 self._current_row = None
-                result.append(self._additive_wave_generator.generate_next(self._f0))
+                segment_len = min(remaining, self._phase_duration - self._clock_position)
+                block = self._additive_wave_generator.generate_block(self._f0, segment_len)
             else:
-                result.append(self._additive_wave_generator.generate_next_with_offsets(
-                    self._f0, phase_offsets=self._get_phase_offsets()
-                ))
+                segment_len = min(remaining, self._internal_clock - self._clock_position)
+                block = self._additive_wave_generator.generate_block_with_offsets(
+                    self._f0, segment_len, phase_offsets=self._get_phase_offsets()
+                )
 
-            self._clock_position = (self._clock_position + 1) % self._internal_clock
+            result.extend(block.tolist())
+            self._clock_position = (self._clock_position + segment_len) % self._internal_clock
+            remaining -= segment_len
 
         return AudioChunk(result)

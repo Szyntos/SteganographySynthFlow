@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from itertools import islice, cycle
 from typing import Optional
 
 from Payload import SymbolRow
@@ -24,12 +23,15 @@ class Serializer(ABC):
         self._symbol_index = 0
 
     def get_symbol_row(self, num_symbols: int) -> SymbolRow:
-        if self._serialized_payload.get_size() == 0:
+        size = self._serialized_payload.get_size()
+        if size == 0:
             return SymbolRow([0.] * num_symbols)
-        result: SymbolRow = SymbolRow(list(islice(cycle(self._serialized_payload.get_offsets()), self._symbol_index,
-                                                  self._symbol_index + num_symbols)))
 
-        self._symbol_index = (self._symbol_index + num_symbols) % self._serialized_payload.get_size()
+        offsets = self._serialized_payload.get_offsets()
+        start = self._symbol_index % size
+        result = SymbolRow([offsets[(start + i) % size] for i in range(num_symbols)])
+
+        self._symbol_index = (self._symbol_index + num_symbols) % size
         return result
 
     def reset_loop(self) -> None:

@@ -36,7 +36,7 @@ class Settings:
         self.sync_msg_start: str = "START_SYNC_START"
         self.sync_msg_end: str   = "END_SYNC_END"
 
-        self.modulator_wav_path: str = r"assets/SpoilerTalkTheLightHouse.wav"
+        self.modulator_wav_path: str = r"assets/sinesweep.wav"
         self.image_path: str = "assets/test.png"
         self.image_target_w: int = 40
         self.image_target_h: int = 40
