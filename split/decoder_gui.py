@@ -2,7 +2,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import filedialog, ttk, messagebox
 from typing import Callable, List, Optional, Tuple
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +64,7 @@ class DecoderEngine:
         self._image_sink: Optional[ImageSink] = None
         self._on_raw_image: Optional[Callable] = None
         self._raw_image_sink: Optional[RawImageSink] = None
+        self._audio_sink: Optional[AudioSink] = None
         self._image_codec = make_pixel_codec(self._codec_mode, settings)
 
         # FIFO tuning: how many input samples still to drop so the decode
@@ -88,13 +89,15 @@ class DecoderEngine:
             self._image_sink = sink
             raw_sink = RawImageSink(self._image_codec, self._settings, on_image=self._on_raw_image)
             self._raw_image_sink = raw_sink
+            self._audio_sink = None
             deserializer = ImageDeserializer(
                 self._settings, SinkTee(sink, raw_sink), self._codec_mode
             )
         else:
             self._image_sink = None
             self._raw_image_sink = None
-            sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE)
+            sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, self._settings)
+            self._audio_sink = sink
             deserializer = AudioDeserializer(self._settings, sink, SerializerMode.DIGITAL)
 
         self._decoder = Decoder(self._settings, self._dec_strategy, deserializer)
@@ -148,6 +151,12 @@ class DecoderEngine:
 
     def set_f0(self, f0: float) -> None:
         self._dec_strategy.set_f0(float(f0))
+
+    def dump_decoded_audio_to_wav(self, file_path: str) -> None:
+        with self._lock:
+            if self._audio_sink is None:
+                raise RuntimeError("No decoded audio available (switch payload type to Audio).")
+            self._audio_sink.dump_to_wav(file_path)
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         with self._lock:
@@ -349,9 +358,19 @@ class DecoderApp(tk.Tk):
         )
         self._raw_preview_label.grid(row=1, column=1)
 
+        # ── decoded audio export ─────────────────────────────────────────────
+        export_frame = ttk.LabelFrame(self, text="Decoded Audio", padding=8)
+        export_frame.grid(row=8, column=0, sticky="ew", **pad)
+        self._export_frame = export_frame
+
+        self._save_audio_btn = ttk.Button(
+            export_frame, text="Save to WAV...", command=self._on_save_decoded_audio,
+        )
+        self._save_audio_btn.grid(row=0, column=0)
+
         # ── volume ───────────────────────────────────────────────────────────
         vol_frame = ttk.LabelFrame(self, text="Monitor Volume", padding=8)
-        vol_frame.grid(row=8, column=0, sticky="ew", **pad)
+        vol_frame.grid(row=9, column=0, sticky="ew", **pad)
 
         self._vol_label = ttk.Label(vol_frame, text="0 dB", width=6, anchor="e")
         self._vol_label.grid(row=0, column=1, padx=(6, 0))
@@ -365,7 +384,7 @@ class DecoderApp(tk.Tk):
 
         # ── pitch ─────────────────────────────────────────────────────────────
         pitch_frame = ttk.LabelFrame(self, text="Pitch (Hz)", padding=8)
-        pitch_frame.grid(row=9, column=0, sticky="ew", **pad)
+        pitch_frame.grid(row=10, column=0, sticky="ew", **pad)
 
         self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
@@ -379,7 +398,7 @@ class DecoderApp(tk.Tk):
 
         # ── bits per symbol ───────────────────────────────────────────────────
         bits_frame = ttk.LabelFrame(self, text="Bits per Symbol", padding=8)
-        bits_frame.grid(row=10, column=0, sticky="ew", **pad)
+        bits_frame.grid(row=11, column=0, sticky="ew", **pad)
 
         self._bits_var = tk.StringVar(value=str(self._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
@@ -389,7 +408,7 @@ class DecoderApp(tk.Tk):
         bits_combo.grid(row=0, column=0, padx=8)
         bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
 
-        ttk.Frame(self).grid(row=11, pady=6)
+        ttk.Frame(self).grid(row=12, pady=6)
         self._update_kind_dependent_visibility()
 
     def _selected_device(self, var: tk.StringVar, devices: List[Tuple[int, str]]) -> Optional[int]:
@@ -456,6 +475,20 @@ class DecoderApp(tk.Tk):
                     child.configure(state=state)
                 except tk.TclError:
                     pass
+        self._save_audio_btn.configure(state="disabled" if is_image else "normal")
+
+    def _on_save_decoded_audio(self) -> None:
+        file_path = filedialog.asksaveasfilename(
+            title="Save decoded audio",
+            defaultextension=".wav",
+            filetypes=[("WAV files", "*.wav"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            self._engine.dump_decoded_audio_to_wav(file_path)
+        except Exception as exc:
+            messagebox.showerror("Save Audio Error", str(exc))
 
     def _on_codec_change(self) -> None:
         mode = SerializerMode.DIGITAL if self._codec_var.get() == "digital" else SerializerMode.ANALOGUE
