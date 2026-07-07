@@ -17,6 +17,7 @@ from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
 from Deserializer import AudioDeserializer, ImageDeserializer
 from Encoder import Encoder, TwoSplitEncodingStrategy
+from EnergyGate import EnergyGate
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
 from Payload import AudioPayload, ImagePayload
@@ -74,6 +75,8 @@ class AudioEngine:
         self._autocorr_estimator = AutocorrF0Estimator()
         self._fft_estimator = FFTF0Estimator()
         self._last_f0_q: float = 0.0
+        self._energy_gate = EnergyGate()
+        self._is_gated: bool = False
         self.set_f0(400.0)
 
     def set_f0_estimator_mode(self, mode: str) -> None:
@@ -90,6 +93,9 @@ class AudioEngine:
 
     def get_estimated_f0(self) -> float:
         return self._last_f0_q
+
+    def is_gated(self) -> bool:
+        return self._is_gated
 
     # ── encoding strategy construction ───────────────────────────────────────
     def _build_audio_encoding_strategy(self) -> TwoSplitEncodingStrategy:
@@ -249,28 +255,35 @@ class AudioEngine:
         with self._lock:
             enc_chunk = self._encoder.process(frames)
             enc_samples = enc_chunk.get_samples()
+            enc_arr = np.asarray(enc_samples, dtype=np.float32)
 
-            if self._f0_mode == "manual":
-                f_hat = self._f0
+            rms_now = EnergyGate.rms(enc_arr)
+            self._is_gated = self._energy_gate.is_drop(rms_now)
+
+            if self._is_gated:
+                dec_samples = [0.0] * len(enc_samples)
             else:
-                estimator = (
-                    self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
-                )
-                f_hat = estimator.estimate(np.asarray(enc_samples, dtype=np.float32), float(self._settings.fs_out))
+                if self._f0_mode == "manual":
+                    f_hat = self._f0
+                else:
+                    estimator = (
+                        self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
+                    )
+                    f_hat = estimator.estimate(enc_arr, float(self._settings.fs_out))
 
-            if self._pitch_quantize and f_hat > 0.0:
-                f_hat = quantize_to_chromatic_hz(f_hat)
+                if self._pitch_quantize and f_hat > 0.0:
+                    f_hat = quantize_to_chromatic_hz(f_hat)
 
-            if f_hat > 0.0:
-                self._last_f0_q = f_hat
-            elif self._last_f0_q > 0.0:
-                f_hat = self._last_f0_q
+                if f_hat > 0.0:
+                    self._last_f0_q = f_hat
+                elif self._last_f0_q > 0.0:
+                    f_hat = self._last_f0_q
 
-            if f_hat > 0.0:
-                self._dec_strategy.set_f0(f_hat)
+                if f_hat > 0.0:
+                    self._dec_strategy.set_f0(f_hat)
 
-            dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
-            dec_samples = dec_chunk.get_samples()
+                dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
+                dec_samples = dec_chunk.get_samples()
 
             samples = enc_samples if self._source == "encoder" else dec_samples
             arr = np.array(samples, dtype=np.float32) * self._volume
@@ -279,6 +292,8 @@ class AudioEngine:
     def start(self) -> None:
         if sd is None:
             raise RuntimeError("sounddevice is not installed.\nRun: pip install sounddevice")
+        self._energy_gate.reset()
+        self._is_gated = False
         block_size = self._settings.audio_driver_polling_rate
         self._stream = sd.OutputStream(
             samplerate=self._settings.fs_out,
@@ -330,6 +345,10 @@ class App(tk.Tk):
         ttk.Label(status_frame, text="Status:").pack(side="left", padx=6, pady=4)
         ttk.Label(status_frame, textvariable=self._status_var, font=("", 10, "bold")).pack(
             side="left", pady=4
+        )
+        self._signal_var = tk.StringVar(value="")
+        ttk.Label(status_frame, textvariable=self._signal_var, foreground="#b00").pack(
+            side="left", padx=12, pady=4
         )
         self.columnconfigure(0, weight=1)
 
@@ -696,6 +715,7 @@ class App(tk.Tk):
             if f0 > 0.0:
                 self._pitch_slider.set(min(max(f0, self._F0_MIN), self._F0_MAX))
                 self._pitch_label.configure(text=f"{int(round(f0))} Hz")
+        self._signal_var.set("SIGNAL WEAK — gated" if self._engine.is_gated() else "")
         self.after(100, self._poll_estimated_f0)
 
     def _on_close(self) -> None:

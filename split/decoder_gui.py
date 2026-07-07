@@ -21,6 +21,7 @@ from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
 from Deserializer import AudioDeserializer, ImageDeserializer
+from EnergyGate import EnergyGate
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
 from Payload.pixel_codec import make_pixel_codec
@@ -83,6 +84,8 @@ class DecoderEngine:
         self._autocorr_estimator = AutocorrF0Estimator()
         self._fft_estimator = FFTF0Estimator()
         self._last_f0_q: float = 0.0
+        self._energy_gate = EnergyGate()
+        self._is_gated: bool = False
         self.set_f0(400.0)
 
     def _rebuild_decode_chain(self) -> None:
@@ -207,6 +210,9 @@ class DecoderEngine:
     def get_estimated_f0(self) -> float:
         return self._last_f0_q
 
+    def is_gated(self) -> bool:
+        return self._is_gated
+
     def _callback(self, indata: np.ndarray, outdata: np.ndarray, frames: int, time, status) -> None:
         with self._lock:
             samples = indata[:, 0].astype(np.float32)
@@ -215,6 +221,12 @@ class DecoderEngine:
                 drop = min(self._pending_skip, len(samples))
                 samples = samples[drop:]
                 self._pending_skip -= drop
+
+            rms_now = EnergyGate.rms(samples)
+            self._is_gated = self._energy_gate.is_drop(rms_now)
+            if self._is_gated:
+                outdata[:, 0] = 0.0
+                return
 
             if self._f0_mode == "manual":
                 f_hat = self._manual_f0
@@ -242,6 +254,8 @@ class DecoderEngine:
     def start(self) -> None:
         if sd is None:
             raise RuntimeError("sounddevice is not installed.\nRun: pip install sounddevice")
+        self._energy_gate.reset()
+        self._is_gated = False
         self._stream = sd.Stream(
             samplerate=self._settings.fs_out,
             blocksize=self._settings.audio_driver_polling_rate,
@@ -294,6 +308,10 @@ class DecoderApp(tk.Tk):
         ttk.Label(status_frame, text="Status:").pack(side="left", padx=6, pady=4)
         ttk.Label(status_frame, textvariable=self._status_var, font=("", 10, "bold")).pack(
             side="left", pady=4
+        )
+        self._signal_var = tk.StringVar(value="")
+        ttk.Label(status_frame, textvariable=self._signal_var, foreground="#b00").pack(
+            side="left", padx=12, pady=4
         )
         self.columnconfigure(0, weight=1)
 
@@ -637,6 +655,7 @@ class DecoderApp(tk.Tk):
             if f0 > 0.0:
                 self._pitch_slider.set(min(max(f0, self._F0_MIN), self._F0_MAX))
                 self._pitch_label.configure(text=f"{int(round(f0))} Hz")
+        self._signal_var.set("SIGNAL WEAK — gated" if self._engine.is_gated() else "")
         self.after(100, self._poll_estimated_f0)
 
     def _on_close(self) -> None:
