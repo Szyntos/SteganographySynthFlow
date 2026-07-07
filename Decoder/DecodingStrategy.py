@@ -21,6 +21,7 @@ class DecodingStrategy(ABC):
     def reconfigure(self) -> None:
         self._num_rows = self._settings.data_harmonics
         self._internal_clock = self._settings.chunk_size
+        self._audio_chunk_input_fifo = SamplesFifo()
 
     def set_additive_wave_generator(self, additive_wave_generator: AdditiveWaveGenerator):
         self._additive_wave_generator = additive_wave_generator
