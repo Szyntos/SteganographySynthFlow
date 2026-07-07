@@ -1,8 +1,13 @@
 import os
+import sys
 import threading
 import tkinter as tk
-from typing import Callable, Optional
-from tkinter import filedialog, ttk, messagebox
+from tkinter import ttk, messagebox
+from typing import Callable, List, Optional, Tuple
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_ROOT)
+os.chdir(_PROJECT_ROOT)  # Settings uses paths relative to the project root
 
 import numpy as np
 from PIL import Image as PILImage, ImageTk
@@ -16,11 +21,8 @@ from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
 from Deserializer import AudioDeserializer, ImageDeserializer
-from Encoder import Encoder, TwoSplitEncodingStrategy
 from Framing import FramingSyncController
-from Payload import AudioPayload, ImagePayload
 from Payload.pixel_codec import make_pixel_codec
-from Serializer import AudioSerializer, ImageSerializer
 from SerializerMode import SerializerMode
 from Settings import Settings
 from Sink import AudioSink, ImageSink, SinkBehaviour
@@ -34,55 +36,43 @@ def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
     return gen
 
 
-class AudioEngine:
+def list_devices(kind: str) -> List[Tuple[int, str]]:
+    """kind: 'input' or 'output'."""
+    if sd is None:
+        return []
+    key = f"max_{kind}_channels"
+    devices = []
+    for idx, dev in enumerate(sd.query_devices()):
+        if dev[key] > 0:
+            devices.append((idx, f"[{idx}] {dev['name']}"))
+    return devices
+
+
+class DecoderEngine:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._volume: float = 1.0
-        self._source: str = "encoder"
         self._stream = None
         self._lock = threading.Lock()
+        self._input_device: Optional[int] = None
+        self._output_device: Optional[int] = None
 
         self._payload_kind: str = "audio"
         self._codec_mode: SerializerMode = SerializerMode.DIGITAL
         self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
         self._on_image: Optional[Callable] = None
         self._image_sink: Optional[ImageSink] = None
-        self._f0: float = 0.0
-
-        self._audio_payload = AudioPayload()
-        self._audio_payload.load_from_file(settings.modulator_wav_path)
-
-        self._image_path = settings.image_path
         self._image_codec = make_pixel_codec(self._codec_mode, settings)
-        self._image_payload = ImagePayload(settings, self._image_codec)
-        self._image_payload.load_from_file(self._image_path)
+
+        # FIFO tuning: how many input samples still to drop so the decode
+        # window slides to the requested offset within a chunk.
+        self._tune_offset: int = 0
+        self._pending_skip: int = 0
 
         self._dec_strategy = TwoSplitDecodingStrategy(settings, _make_harmonic_generator(settings))
-
-        self._encoding_strategy = self._build_audio_encoding_strategy()
-        self._encoder = Encoder(self._encoding_strategy)
-
         self._decoder: Optional[Decoder] = None
         self._rebuild_decode_chain()
-
         self.set_f0(400.0)
-
-    # ── encoding strategy construction ───────────────────────────────────────
-    def _build_audio_encoding_strategy(self) -> TwoSplitEncodingStrategy:
-        serializer = AudioSerializer(self._settings, SerializerMode.DIGITAL)
-        strategy = TwoSplitEncodingStrategy(
-            self._settings, _make_harmonic_generator(self._settings), serializer
-        )
-        strategy.load_payload(self._audio_payload)
-        return strategy
-
-    def _build_image_encoding_strategy(self) -> TwoSplitEncodingStrategy:
-        serializer = ImageSerializer(self._settings, self._codec_mode)
-        strategy = TwoSplitEncodingStrategy(
-            self._settings, _make_harmonic_generator(self._settings), serializer
-        )
-        strategy.load_payload(self._image_payload)
-        return strategy
 
     def _rebuild_decode_chain(self) -> None:
         if self._payload_kind == "image":
@@ -106,23 +96,20 @@ class AudioEngine:
     def set_volume(self, vol: float) -> None:
         self._volume = float(vol)
 
-    def set_source(self, source: str) -> None:
-        self._source = source
+    def set_input_device(self, device: Optional[int]) -> None:
+        self._input_device = device
 
-    def get_payload_kind(self) -> str:
-        return self._payload_kind
+    def set_output_device(self, device: Optional[int]) -> None:
+        self._output_device = device
+
+    def is_running(self) -> bool:
+        return self._stream is not None
 
     def set_payload_kind(self, kind: str) -> None:
         if kind not in ("audio", "image"):
             raise ValueError(f"Unknown payload kind: {kind}")
         with self._lock:
             self._payload_kind = kind
-            self._encoding_strategy = (
-                self._build_audio_encoding_strategy() if kind == "audio"
-                else self._build_image_encoding_strategy()
-            )
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
             self._dec_strategy.reconfigure()
             self._rebuild_decode_chain()
 
@@ -130,13 +117,7 @@ class AudioEngine:
         with self._lock:
             self._codec_mode = mode
             self._image_codec = make_pixel_codec(mode, self._settings)
-            payload = ImagePayload(self._settings, self._image_codec)
-            payload.load_from_file(self._image_path)
-            self._image_payload = payload
             if self._payload_kind == "image":
-                self._encoding_strategy = self._build_image_encoding_strategy()
-                self._encoding_strategy.set_f0(self._f0)
-                self._encoder.set_encoding_strategy(self._encoding_strategy)
                 self._dec_strategy.reconfigure()
                 self._rebuild_decode_chain()
 
@@ -152,77 +133,55 @@ class AudioEngine:
             if self._image_sink is not None:
                 self._image_sink.set_on_image(callback)
 
-    def get_latest_image(self):
-        with self._lock:
-            return self._image_sink.get_latest_image() if self._image_sink is not None else None
-
-    def load_payload_file(self, file_path: str) -> None:
-        with self._lock:
-            if self._payload_kind == "image":
-                self._image_path = file_path
-                payload = ImagePayload(self._settings, self._image_codec)
-                payload.load_from_file(file_path)
-                self._image_payload = payload
-                self._encoding_strategy = self._build_image_encoding_strategy()
-            else:
-                payload = AudioPayload()
-                payload.load_from_file(file_path)
-                self._audio_payload = payload
-                self._encoding_strategy = self._build_audio_encoding_strategy()
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
-            self._dec_strategy.reconfigure()
-
-    def get_position_fraction(self) -> float:
-        with self._lock:
-            return self._encoding_strategy.get_position_fraction()
-
-    def set_position_fraction(self, fraction: float) -> None:
-        with self._lock:
-            self._encoding_strategy.set_position_fraction(fraction)
-
     def set_f0(self, f0: float) -> None:
-        self._f0 = float(f0)
-        self._encoder.set_f0(f0)
-        self._dec_strategy.set_f0(f0)
+        self._dec_strategy.set_f0(float(f0))
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         with self._lock:
             self._settings.set_bits_per_symbol(int(bits_per_symbol))
             self._image_codec = make_pixel_codec(self._codec_mode, self._settings)
-            payload = ImagePayload(self._settings, self._image_codec)
-            payload.load_from_file(self._image_path)
-            self._image_payload = payload
-            self._encoding_strategy = (
-                self._build_audio_encoding_strategy() if self._payload_kind == "audio"
-                else self._build_image_encoding_strategy()
-            )
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
             self._dec_strategy.reconfigure()
             self._rebuild_decode_chain()
 
-    def _callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
+    def set_tune_offset(self, offset: int) -> None:
+        """Slide the decode window by dropping input samples.
+
+        Moving the slider by +d drops d samples; moving it by -d is realised
+        as dropping (chunk_size - d), so the window always converges to the
+        requested offset modulo chunk_size.
+        """
+        chunk = self._settings.chunk_size
+        offset = int(offset) % chunk
         with self._lock:
-            enc_chunk = self._encoder.process(frames)
-            enc_samples = enc_chunk.get_samples()
+            delta = (offset - self._tune_offset) % chunk
+            self._tune_offset = offset
+            self._pending_skip = (self._pending_skip + delta) % chunk
 
-            dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
-            dec_samples = dec_chunk.get_samples()
+    def get_tune_offset(self) -> int:
+        return self._tune_offset
 
-            samples = enc_samples if self._source == "encoder" else dec_samples
-            arr = np.array(samples, dtype=np.float32) * self._volume
+    def _callback(self, indata: np.ndarray, outdata: np.ndarray, frames: int, time, status) -> None:
+        with self._lock:
+            samples = indata[:, 0].astype(np.float32)
+
+            if self._pending_skip > 0:
+                drop = min(self._pending_skip, len(samples))
+                samples = samples[drop:]
+                self._pending_skip -= drop
+
+            dec_chunk = self._decoder.process(AudioChunk(samples.tolist()), frames)
+            arr = np.array(dec_chunk.get_samples(), dtype=np.float32) * self._volume
             outdata[:, 0] = arr
 
     def start(self) -> None:
         if sd is None:
             raise RuntimeError("sounddevice is not installed.\nRun: pip install sounddevice")
-        block_size = self._settings.audio_driver_polling_rate
-        self._stream = sd.OutputStream(
+        self._stream = sd.Stream(
             samplerate=self._settings.fs_out,
-            blocksize=block_size,
+            blocksize=self._settings.audio_driver_polling_rate,
             channels=1,
             dtype="float32",
+            device=(self._input_device, self._output_device),
             callback=self._callback,
         )
         self._stream.start()
@@ -234,31 +193,32 @@ class AudioEngine:
             self._stream = None
 
 
-class App(tk.Tk):
+class DecoderApp(tk.Tk):
     _F0_MIN = 100.0
     _F0_MAX = 2000.0
     _IMAGE_PREVIEW_SIZE = 200
 
     def __init__(self):
         super().__init__()
-        self.title("SteganographySynthFlow")
+        self.title("SSF Decoder")
         self.resizable(False, False)
 
         settings = Settings()
-        self._engine = AudioEngine(settings)
+        self._settings = settings
+        self._engine = DecoderEngine(settings)
         self._engine.set_on_image(self._on_image_frame)
         self._running = False
         self._pending_image_frame = None
+        self._input_devices = list_devices("input")
+        self._output_devices = list_devices("output")
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._poll_position()
         self._poll_image()
 
     def _build_ui(self) -> None:
         pad = {"padx": 16, "pady": 6}
 
-        # ── status ──────────────────────────────────────────────────────────
         self._status_var = tk.StringVar(value="Stopped")
         status_frame = ttk.Frame(self, relief="sunken", borderwidth=1)
         status_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 0))
@@ -268,13 +228,37 @@ class App(tk.Tk):
         )
         self.columnconfigure(0, weight=1)
 
-        # ── start / stop ─────────────────────────────────────────────────────
         self._toggle_btn = ttk.Button(self, text="▶  Start", command=self._toggle, width=14)
         self._toggle_btn.grid(row=1, column=0, **pad)
 
+        # ── devices ──────────────────────────────────────────────────────────
+        dev_frame = ttk.LabelFrame(self, text="Audio Devices", padding=8)
+        dev_frame.grid(row=2, column=0, sticky="ew", **pad)
+        dev_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(dev_frame, text="Input:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        in_names = ["(default)"] + [name for _, name in self._input_devices]
+        self._in_device_var = tk.StringVar(value=in_names[0])
+        in_combo = ttk.Combobox(
+            dev_frame, textvariable=self._in_device_var, values=in_names,
+            state="readonly", width=38,
+        )
+        in_combo.grid(row=0, column=1, sticky="ew", pady=(0, 4))
+        in_combo.bind("<<ComboboxSelected>>", self._on_device_change)
+
+        ttk.Label(dev_frame, text="Output:").grid(row=1, column=0, sticky="w", padx=(0, 6))
+        out_names = ["(default)"] + [name for _, name in self._output_devices]
+        self._out_device_var = tk.StringVar(value=out_names[0])
+        out_combo = ttk.Combobox(
+            dev_frame, textvariable=self._out_device_var, values=out_names,
+            state="readonly", width=38,
+        )
+        out_combo.grid(row=1, column=1, sticky="ew")
+        out_combo.bind("<<ComboboxSelected>>", self._on_device_change)
+
         # ── payload kind ──────────────────────────────────────────────────────
         kind_frame = ttk.LabelFrame(self, text="Payload Type", padding=8)
-        kind_frame.grid(row=2, column=0, sticky="ew", **pad)
+        kind_frame.grid(row=3, column=0, sticky="ew", **pad)
 
         self._kind_var = tk.StringVar(value="audio")
         ttk.Radiobutton(
@@ -286,33 +270,23 @@ class App(tk.Tk):
             value="image", command=self._on_kind_change,
         ).grid(row=0, column=1, padx=8)
 
-        # ── payload file + position ──────────────────────────────────────────
-        payload_frame = ttk.LabelFrame(self, text="Payload", padding=8)
-        payload_frame.grid(row=3, column=0, sticky="ew", **pad)
-        payload_frame.columnconfigure(0, weight=1)
-        self._payload_frame = payload_frame
+        # ── fifo tuning ──────────────────────────────────────────────────────
+        tune_frame = ttk.LabelFrame(self, text="Window Tuning (samples)", padding=8)
+        tune_frame.grid(row=4, column=0, sticky="ew", **pad)
 
-        self._payload_var = tk.StringVar(
-            value=os.path.basename(self._engine._settings.modulator_wav_path)
-        )
-        ttk.Label(payload_frame, textvariable=self._payload_var, anchor="w").grid(
-            row=0, column=0, sticky="ew", padx=(0, 8)
-        )
-        ttk.Button(payload_frame, text="Browse...", command=self._on_pick_payload).grid(
-            row=0, column=1
-        )
+        self._tune_label = ttk.Label(tune_frame, text="0", width=6, anchor="e")
+        self._tune_label.grid(row=0, column=1, padx=(6, 0))
 
-        self._payload_dragging = False
-        self._position_slider = ttk.Scale(
-            payload_frame, from_=0, to=1000, orient="horizontal", length=280,
+        self._tune_slider = ttk.Scale(
+            tune_frame, from_=0, to=self._settings.chunk_size - 1,
+            orient="horizontal", length=280, command=self._on_tune_change,
         )
-        self._position_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        self._position_slider.bind("<ButtonPress-1>", self._on_position_drag_start)
-        self._position_slider.bind("<ButtonRelease-1>", self._on_position_drag_end)
+        self._tune_slider.set(0)
+        self._tune_slider.grid(row=0, column=0)
 
-        # ── image codec mode (digital / analogue) ────────────────────────────
+        # ── image codec mode ─────────────────────────────────────────────────
         codec_frame = ttk.LabelFrame(self, text="Image Encoding", padding=8)
-        codec_frame.grid(row=4, column=0, sticky="ew", **pad)
+        codec_frame.grid(row=5, column=0, sticky="ew", **pad)
         self._codec_frame = codec_frame
 
         self._codec_var = tk.StringVar(value="digital")
@@ -325,9 +299,9 @@ class App(tk.Tk):
             value="analogue", command=self._on_codec_change,
         ).grid(row=0, column=1, padx=8)
 
-        # ── image sink behaviour (live / clean) ──────────────────────────────
+        # ── sink behaviour ───────────────────────────────────────────────────
         sink_frame = ttk.LabelFrame(self, text="Reconstruction Mode", padding=8)
-        sink_frame.grid(row=5, column=0, sticky="ew", **pad)
+        sink_frame.grid(row=6, column=0, sticky="ew", **pad)
         self._sink_frame = sink_frame
 
         self._sink_var = tk.StringVar(value="live")
@@ -340,40 +314,24 @@ class App(tk.Tk):
             value="clean", command=self._on_sink_behaviour_change,
         ).grid(row=0, column=1, padx=8)
 
-        # ── reconstructed image preview ──────────────────────────────────────
+        # ── image preview ────────────────────────────────────────────────────
         preview_frame = ttk.LabelFrame(self, text="Reconstructed Image", padding=8)
-        preview_frame.grid(row=6, column=0, sticky="ew", **pad)
+        preview_frame.grid(row=7, column=0, sticky="ew", **pad)
         self._preview_frame = preview_frame
 
         self._preview_photo = None
         self._preview_label = ttk.Label(
-            preview_frame, text="(no frame yet)", anchor="center",
-            width=28,
+            preview_frame, text="(no frame yet)", anchor="center", width=28,
         )
         self._preview_label.grid(row=0, column=0)
 
-        # ── output source ────────────────────────────────────────────────────
-        src_frame = ttk.LabelFrame(self, text="Output Source", padding=8)
-        src_frame.grid(row=7, column=0, sticky="ew", **pad)
-
-        self._source_var = tk.StringVar(value="encoder")
-        ttk.Radiobutton(
-            src_frame, text="Encoder", variable=self._source_var,
-            value="encoder", command=self._on_source_change,
-        ).grid(row=0, column=0, padx=8)
-        ttk.Radiobutton(
-            src_frame, text="Decoder", variable=self._source_var,
-            value="decoder", command=self._on_source_change,
-        ).grid(row=0, column=1, padx=8)
-
         # ── volume ───────────────────────────────────────────────────────────
-        vol_frame = ttk.LabelFrame(self, text="Volume", padding=8)
+        vol_frame = ttk.LabelFrame(self, text="Monitor Volume", padding=8)
         vol_frame.grid(row=8, column=0, sticky="ew", **pad)
 
         self._vol_label = ttk.Label(vol_frame, text="0 dB", width=6, anchor="e")
         self._vol_label.grid(row=0, column=1, padx=(6, 0))
 
-        # Slider position is in dB: -60 (min) to 0 (max). Position 0 = silence.
         self._vol_slider = ttk.Scale(
             vol_frame, from_=-60, to=0, orient="horizontal", length=280,
             command=self._on_volume_change,
@@ -399,7 +357,7 @@ class App(tk.Tk):
         bits_frame = ttk.LabelFrame(self, text="Bits per Symbol", padding=8)
         bits_frame.grid(row=10, column=0, sticky="ew", **pad)
 
-        self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
+        self._bits_var = tk.StringVar(value=str(self._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
             bits_frame, textvariable=self._bits_var,
             values=[str(i) for i in range(1, 9)], state="readonly", width=6,
@@ -407,10 +365,25 @@ class App(tk.Tk):
         bits_combo.grid(row=0, column=0, padx=8)
         bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
 
-        # ── bottom padding ────────────────────────────────────────────────────
         ttk.Frame(self).grid(row=11, pady=6)
-
         self._update_kind_dependent_visibility()
+
+    def _selected_device(self, var: tk.StringVar, devices: List[Tuple[int, str]]) -> Optional[int]:
+        name = var.get()
+        for idx, dev_name in devices:
+            if dev_name == name:
+                return idx
+        return None
+
+    def _apply_devices(self) -> None:
+        self._engine.set_input_device(self._selected_device(self._in_device_var, self._input_devices))
+        self._engine.set_output_device(self._selected_device(self._out_device_var, self._output_devices))
+
+    def _on_device_change(self, _event=None) -> None:
+        self._apply_devices()
+        if self._running:
+            self._engine.stop()
+            self._start()
 
     def _toggle(self) -> None:
         if self._running:
@@ -419,9 +392,10 @@ class App(tk.Tk):
             self._start()
 
     def _start(self) -> None:
+        self._apply_devices()
         try:
             self._engine.start()
-        except RuntimeError as exc:
+        except Exception as exc:
             messagebox.showerror("Audio Error", str(exc))
             return
         self._running = True
@@ -434,54 +408,13 @@ class App(tk.Tk):
         self._status_var.set("Stopped")
         self._toggle_btn.configure(text="▶  Start")
 
-    def _on_pick_payload(self) -> None:
-        if self._kind_var.get() == "image":
-            file_path = filedialog.askopenfilename(
-                title="Select image payload",
-                filetypes=[
-                    ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
-                    ("All files", "*.*"),
-                ],
-            )
-        else:
-            file_path = filedialog.askopenfilename(
-                title="Select audio payload",
-                filetypes=[
-                    ("Audio files", "*.wav *.mp3 *.flac *.ogg"),
-                    ("All files", "*.*"),
-                ],
-            )
-        if not file_path:
-            return
-        try:
-            self._engine.load_payload_file(file_path)
-        except Exception as exc:
-            messagebox.showerror("Payload Error", str(exc))
-            return
-        self._payload_var.set(os.path.basename(file_path))
-
-    def _on_position_drag_start(self, _event) -> None:
-        self._payload_dragging = True
-
-    def _on_position_drag_end(self, _event) -> None:
-        fraction = self._position_slider.get() / 1000.0
-        self._engine.set_position_fraction(fraction)
-        self._payload_dragging = False
-
-    def _poll_position(self) -> None:
-        if not self._payload_dragging:
-            fraction = self._engine.get_position_fraction()
-            self._position_slider.set(fraction * 1000.0)
-        self.after(100, self._poll_position)
+    def _on_tune_change(self, value: str) -> None:
+        offset = int(float(value))
+        self._engine.set_tune_offset(offset)
+        self._tune_label.configure(text=str(offset))
 
     def _on_kind_change(self) -> None:
-        kind = self._kind_var.get()
-        self._engine.set_payload_kind(kind)
-        default_name = (
-            os.path.basename(self._engine._image_path) if kind == "image"
-            else os.path.basename(self._engine._settings.modulator_wav_path)
-        )
-        self._payload_var.set(default_name)
+        self._engine.set_payload_kind(self._kind_var.get())
         self._pending_image_frame = None
         self._preview_photo = None
         self._preview_label.configure(image="", text="(no frame yet)")
@@ -530,10 +463,7 @@ class App(tk.Tk):
             self._engine.set_bits_per_symbol(int(self._bits_var.get()))
         except Exception as exc:
             messagebox.showerror("Bits per Symbol Error", str(exc))
-            self._bits_var.set(str(self._engine._settings.bits_per_symbol))
-
-    def _on_source_change(self) -> None:
-        self._engine.set_source(self._source_var.get())
+            self._bits_var.set(str(self._settings.bits_per_symbol))
 
     def _on_volume_change(self, value: str) -> None:
         db = float(value)
@@ -553,5 +483,5 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    app = App()
+    app = DecoderApp()
     app.mainloop()

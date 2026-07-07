@@ -45,6 +45,13 @@ class Settings:
 
         self.MSG_FS: int = (self.data_harmonics * self.fs_out) // self.chunk_size
 
+    def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
+        if not 1 <= bits_per_symbol <= 8:
+            raise ValueError("bits_per_symbol must be in [1, 8]")
+        self.bits_per_symbol = bits_per_symbol
+        self.bits_per_chunk = self.data_harmonics * bits_per_symbol
+        self.bytes_per_chunk = self.bits_per_chunk // 8
+
     def validate(self):
         if self.chunk_size % 2 != 0:
             print("chunk_size must be even")
