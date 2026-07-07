@@ -17,6 +17,7 @@ from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
 from Deserializer import AudioDeserializer, ImageDeserializer
 from Encoder import Encoder, TwoSplitEncodingStrategy
+from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
 from Payload import AudioPayload, ImagePayload
 from Payload.pixel_codec import make_pixel_codec
@@ -68,7 +69,27 @@ class AudioEngine:
         self._decoder: Optional[Decoder] = None
         self._rebuild_decode_chain()
 
+        self._f0_mode: str = "manual"  # "manual", "autocorr", "fft"
+        self._pitch_quantize: bool = False
+        self._autocorr_estimator = AutocorrF0Estimator()
+        self._fft_estimator = FFTF0Estimator()
+        self._last_f0_q: float = 0.0
         self.set_f0(400.0)
+
+    def set_f0_estimator_mode(self, mode: str) -> None:
+        if mode not in ("manual", "autocorr", "fft"):
+            raise ValueError(f"Unknown f0 estimator mode: {mode}")
+        with self._lock:
+            self._f0_mode = mode
+            self._last_f0_q = 0.0
+            if mode == "manual":
+                self._dec_strategy.set_f0(self._f0)
+
+    def set_pitch_quantize(self, enabled: bool) -> None:
+        self._pitch_quantize = bool(enabled)
+
+    def get_estimated_f0(self) -> float:
+        return self._last_f0_q
 
     # ── encoding strategy construction ───────────────────────────────────────
     def _build_audio_encoding_strategy(self) -> TwoSplitEncodingStrategy:
@@ -229,6 +250,25 @@ class AudioEngine:
             enc_chunk = self._encoder.process(frames)
             enc_samples = enc_chunk.get_samples()
 
+            if self._f0_mode == "manual":
+                f_hat = self._f0
+            else:
+                estimator = (
+                    self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
+                )
+                f_hat = estimator.estimate(np.asarray(enc_samples, dtype=np.float32), float(self._settings.fs_out))
+
+            if self._pitch_quantize and f_hat > 0.0:
+                f_hat = quantize_to_chromatic_hz(f_hat)
+
+            if f_hat > 0.0:
+                self._last_f0_q = f_hat
+            elif self._last_f0_q > 0.0:
+                f_hat = self._last_f0_q
+
+            if f_hat > 0.0:
+                self._dec_strategy.set_f0(f_hat)
+
             dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
             dec_samples = dec_chunk.get_samples()
 
@@ -278,6 +318,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll_position()
         self._poll_image()
+        self._poll_estimated_f0()
 
     def _build_ui(self) -> None:
         pad = {"padx": 16, "pady": 6}
@@ -425,9 +466,27 @@ class App(tk.Tk):
         self._vol_slider.set(-40)
         self._vol_slider.grid(row=0, column=0)
 
+        # ── f0 estimator ─────────────────────────────────────────────────────
+        f0_frame = ttk.LabelFrame(self, text="F0 Estimator (decode)", padding=8)
+        f0_frame.grid(row=10, column=0, sticky="ew", **pad)
+
+        self._f0_mode_var = tk.StringVar(value="Manual")
+        self._f0_mode_combo = ttk.Combobox(
+            f0_frame, textvariable=self._f0_mode_var,
+            values=["Manual", "Autocorrelation", "FFT"], state="readonly", width=16,
+        )
+        self._f0_mode_combo.grid(row=0, column=0, padx=(0, 12))
+        self._f0_mode_combo.bind("<<ComboboxSelected>>", self._on_f0_mode_change)
+
+        self._quantize_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            f0_frame, text="Quantize Pitch", variable=self._quantize_var,
+            command=self._on_quantize_change,
+        ).grid(row=0, column=1)
+
         # ── pitch ─────────────────────────────────────────────────────────────
         pitch_frame = ttk.LabelFrame(self, text="Pitch (Hz)", padding=8)
-        pitch_frame.grid(row=10, column=0, sticky="ew", **pad)
+        pitch_frame.grid(row=11, column=0, sticky="ew", **pad)
 
         self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
@@ -441,7 +500,7 @@ class App(tk.Tk):
 
         # ── bits per symbol ───────────────────────────────────────────────────
         bits_frame = ttk.LabelFrame(self, text="Bits per Symbol", padding=8)
-        bits_frame.grid(row=11, column=0, sticky="ew", **pad)
+        bits_frame.grid(row=12, column=0, sticky="ew", **pad)
 
         self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
@@ -452,7 +511,7 @@ class App(tk.Tk):
         bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
 
         # ── bottom padding ────────────────────────────────────────────────────
-        ttk.Frame(self).grid(row=12, pady=6)
+        ttk.Frame(self).grid(row=13, pady=6)
 
         self._update_kind_dependent_visibility()
 
@@ -621,6 +680,23 @@ class App(tk.Tk):
         f0 = float(value)
         self._engine.set_f0(f0)
         self._pitch_label.configure(text=f"{int(f0)} Hz")
+
+    _F0_MODE_TO_KEY = {"Manual": "manual", "Autocorrelation": "autocorr", "FFT": "fft"}
+
+    def _on_f0_mode_change(self, _event=None) -> None:
+        mode = self._F0_MODE_TO_KEY[self._f0_mode_var.get()]
+        self._engine.set_f0_estimator_mode(mode)
+
+    def _on_quantize_change(self) -> None:
+        self._engine.set_pitch_quantize(self._quantize_var.get())
+
+    def _poll_estimated_f0(self) -> None:
+        if self._f0_mode_var.get() != "Manual":
+            f0 = self._engine.get_estimated_f0()
+            if f0 > 0.0:
+                self._pitch_slider.set(min(max(f0, self._F0_MIN), self._F0_MAX))
+                self._pitch_label.configure(text=f"{int(round(f0))} Hz")
+        self.after(100, self._poll_estimated_f0)
 
     def _on_close(self) -> None:
         self._stop()
