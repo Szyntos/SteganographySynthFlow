@@ -25,7 +25,7 @@ from Framing import FramingSyncController
 from Payload.pixel_codec import make_pixel_codec
 from SerializerMode import SerializerMode
 from Settings import Settings
-from Sink import AudioSink, ImageSink, SinkBehaviour
+from Sink import AudioSink, ImageSink, RawImageSink, SinkBehaviour, SinkTee
 
 
 def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
@@ -62,6 +62,8 @@ class DecoderEngine:
         self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
         self._on_image: Optional[Callable] = None
         self._image_sink: Optional[ImageSink] = None
+        self._on_raw_image: Optional[Callable] = None
+        self._raw_image_sink: Optional[RawImageSink] = None
         self._image_codec = make_pixel_codec(self._codec_mode, settings)
 
         # FIFO tuning: how many input samples still to drop so the decode
@@ -84,9 +86,14 @@ class DecoderEngine:
                 on_image=self._on_image,
             )
             self._image_sink = sink
-            deserializer = ImageDeserializer(self._settings, sink, self._codec_mode)
+            raw_sink = RawImageSink(self._image_codec, self._settings, on_image=self._on_raw_image)
+            self._raw_image_sink = raw_sink
+            deserializer = ImageDeserializer(
+                self._settings, SinkTee(sink, raw_sink), self._codec_mode
+            )
         else:
             self._image_sink = None
+            self._raw_image_sink = None
             sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE)
             deserializer = AudioDeserializer(self._settings, sink, SerializerMode.DIGITAL)
 
@@ -132,6 +139,12 @@ class DecoderEngine:
             self._on_image = callback
             if self._image_sink is not None:
                 self._image_sink.set_on_image(callback)
+
+    def set_on_raw_image(self, callback: Optional[Callable]) -> None:
+        with self._lock:
+            self._on_raw_image = callback
+            if self._raw_image_sink is not None:
+                self._raw_image_sink.set_on_image(callback)
 
     def set_f0(self, f0: float) -> None:
         self._dec_strategy.set_f0(float(f0))
@@ -207,8 +220,10 @@ class DecoderApp(tk.Tk):
         self._settings = settings
         self._engine = DecoderEngine(settings)
         self._engine.set_on_image(self._on_image_frame)
+        self._engine.set_on_raw_image(self._on_raw_image_frame)
         self._running = False
         self._pending_image_frame = None
+        self._pending_raw_frame = None
         self._input_devices = list_devices("input")
         self._output_devices = list_devices("output")
 
@@ -319,11 +334,20 @@ class DecoderApp(tk.Tk):
         preview_frame.grid(row=7, column=0, sticky="ew", **pad)
         self._preview_frame = preview_frame
 
+        ttk.Label(preview_frame, text="Synced").grid(row=0, column=0)
+        ttk.Label(preview_frame, text="Raw (no sync)").grid(row=0, column=1)
+
         self._preview_photo = None
         self._preview_label = ttk.Label(
             preview_frame, text="(no frame yet)", anchor="center", width=28,
         )
-        self._preview_label.grid(row=0, column=0)
+        self._preview_label.grid(row=1, column=0, padx=(0, 8))
+
+        self._raw_preview_photo = None
+        self._raw_preview_label = ttk.Label(
+            preview_frame, text="(no frame yet)", anchor="center", width=28,
+        )
+        self._raw_preview_label.grid(row=1, column=1)
 
         # ── volume ───────────────────────────────────────────────────────────
         vol_frame = ttk.LabelFrame(self, text="Monitor Volume", padding=8)
@@ -418,6 +442,9 @@ class DecoderApp(tk.Tk):
         self._pending_image_frame = None
         self._preview_photo = None
         self._preview_label.configure(image="", text="(no frame yet)")
+        self._pending_raw_frame = None
+        self._raw_preview_photo = None
+        self._raw_preview_label.configure(image="", text="(no frame yet)")
         self._update_kind_dependent_visibility()
 
     def _update_kind_dependent_visibility(self) -> None:
@@ -442,20 +469,34 @@ class DecoderApp(tk.Tk):
         # Called from the audio callback thread; hand off to the Tk main loop.
         self._pending_image_frame = frame
 
+    def _on_raw_image_frame(self, frame) -> None:
+        self._pending_raw_frame = frame
+
+    def _render_frame(self, frame, label: ttk.Label):
+        pixels, width, height, channels = frame
+        mode = "L" if channels == 1 else "RGB"
+        try:
+            image = PILImage.frombytes(mode, (width, height), bytes(pixels))
+            image = image.resize(
+                (self._IMAGE_PREVIEW_SIZE, self._IMAGE_PREVIEW_SIZE), PILImage.NEAREST
+            )
+            photo = ImageTk.PhotoImage(image)
+            label.configure(image=photo, text="")
+            return photo
+        except Exception:
+            return None
+
     def _poll_image(self) -> None:
         frame = self._pending_image_frame
         if frame is not None:
-            pixels, width, height, channels = frame
-            mode = "L" if channels == 1 else "RGB"
-            try:
-                image = PILImage.frombytes(mode, (width, height), bytes(pixels))
-                image = image.resize(
-                    (self._IMAGE_PREVIEW_SIZE, self._IMAGE_PREVIEW_SIZE), PILImage.NEAREST
-                )
-                self._preview_photo = ImageTk.PhotoImage(image)
-                self._preview_label.configure(image=self._preview_photo, text="")
-            except Exception:
-                pass
+            photo = self._render_frame(frame, self._preview_label)
+            if photo is not None:
+                self._preview_photo = photo
+        raw_frame = self._pending_raw_frame
+        if raw_frame is not None:
+            photo = self._render_frame(raw_frame, self._raw_preview_label)
+            if photo is not None:
+                self._raw_preview_photo = photo
         self.after(100, self._poll_image)
 
     def _on_bits_change(self, _event=None) -> None:
