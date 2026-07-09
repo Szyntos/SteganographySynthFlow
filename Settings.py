@@ -3,7 +3,7 @@ import math
 class Settings:
     def __init__(self):
         self.fs_out: int     = 48_000
-        self.chunk_size: int = 480
+        self.chunk_size: int = 480 * 2
 
         self.audio_driver_polling_rate: int = 512
 

@@ -351,14 +351,20 @@ class App(tk.Tk):
             side="left", padx=12, pady=4
         )
         self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
 
         # ── start / stop ─────────────────────────────────────────────────────
         self._toggle_btn = ttk.Button(self, text="▶  Start", command=self._toggle, width=14)
-        self._toggle_btn.grid(row=1, column=0, **pad)
+        self._toggle_btn.grid(row=1, column=0, columnspan=2, **pad)
+
+        # ── left column ─────────────────────────────────────────────────────
+        left = ttk.Frame(self)
+        left.grid(row=2, column=0, sticky="new")
+        left.columnconfigure(0, weight=1)
 
         # ── payload kind ──────────────────────────────────────────────────────
-        kind_frame = ttk.LabelFrame(self, text="Payload Type", padding=8)
-        kind_frame.grid(row=2, column=0, sticky="ew", **pad)
+        kind_frame = ttk.LabelFrame(left, text="Payload Type", padding=8)
+        kind_frame.grid(row=0, column=0, sticky="ew", **pad)
 
         self._kind_var = tk.StringVar(value="audio")
         ttk.Radiobutton(
@@ -371,8 +377,8 @@ class App(tk.Tk):
         ).grid(row=0, column=1, padx=8)
 
         # ── payload file + position ──────────────────────────────────────────
-        payload_frame = ttk.LabelFrame(self, text="Payload", padding=8)
-        payload_frame.grid(row=3, column=0, sticky="ew", **pad)
+        payload_frame = ttk.LabelFrame(left, text="Payload", padding=8)
+        payload_frame.grid(row=1, column=0, sticky="ew", **pad)
         payload_frame.columnconfigure(0, weight=1)
         self._payload_frame = payload_frame
 
@@ -395,8 +401,8 @@ class App(tk.Tk):
         self._position_slider.bind("<ButtonRelease-1>", self._on_position_drag_end)
 
         # ── image codec mode (digital / analogue) ────────────────────────────
-        codec_frame = ttk.LabelFrame(self, text="Image Encoding", padding=8)
-        codec_frame.grid(row=4, column=0, sticky="ew", **pad)
+        codec_frame = ttk.LabelFrame(left, text="Image Encoding", padding=8)
+        codec_frame.grid(row=2, column=0, sticky="ew", **pad)
         self._codec_frame = codec_frame
 
         self._codec_var = tk.StringVar(value="digital")
@@ -410,8 +416,8 @@ class App(tk.Tk):
         ).grid(row=0, column=1, padx=8)
 
         # ── image sink behaviour (live / clean) ──────────────────────────────
-        sink_frame = ttk.LabelFrame(self, text="Reconstruction Mode", padding=8)
-        sink_frame.grid(row=5, column=0, sticky="ew", **pad)
+        sink_frame = ttk.LabelFrame(left, text="Reconstruction Mode", padding=8)
+        sink_frame.grid(row=3, column=0, sticky="ew", **pad)
         self._sink_frame = sink_frame
 
         self._sink_var = tk.StringVar(value="live")
@@ -424,9 +430,55 @@ class App(tk.Tk):
             value="clean", command=self._on_sink_behaviour_change,
         ).grid(row=0, column=1, padx=8)
 
+        # ── output source ────────────────────────────────────────────────────
+        src_frame = ttk.LabelFrame(left, text="Output Source", padding=8)
+        src_frame.grid(row=4, column=0, sticky="ew", **pad)
+
+        self._source_var = tk.StringVar(value="encoder")
+        ttk.Radiobutton(
+            src_frame, text="Encoder", variable=self._source_var,
+            value="encoder", command=self._on_source_change,
+        ).grid(row=0, column=0, padx=8)
+        ttk.Radiobutton(
+            src_frame, text="Decoder", variable=self._source_var,
+            value="decoder", command=self._on_source_change,
+        ).grid(row=0, column=1, padx=8)
+
+        # ── volume ───────────────────────────────────────────────────────────
+        vol_frame = ttk.LabelFrame(left, text="Volume", padding=8)
+        vol_frame.grid(row=5, column=0, sticky="ew", **pad)
+
+        self._vol_label = ttk.Label(vol_frame, text="0 dB", width=6, anchor="e")
+        self._vol_label.grid(row=0, column=1, padx=(6, 0))
+
+        # Slider position is in dB: -60 (min) to 0 (max). Position 0 = silence.
+        self._vol_slider = ttk.Scale(
+            vol_frame, from_=-60, to=0, orient="horizontal", length=280,
+            command=self._on_volume_change,
+        )
+        self._vol_slider.set(-40)
+        self._vol_slider.grid(row=0, column=0)
+
+        # ── bits per symbol ───────────────────────────────────────────────────
+        bits_frame = ttk.LabelFrame(left, text="Bits per Symbol", padding=8)
+        bits_frame.grid(row=6, column=0, sticky="ew", **pad)
+
+        self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
+        bits_combo = ttk.Combobox(
+            bits_frame, textvariable=self._bits_var,
+            values=[str(i) for i in range(1, 9)], state="readonly", width=6,
+        )
+        bits_combo.grid(row=0, column=0, padx=8)
+        bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
+
+        # ── right column ────────────────────────────────────────────────────
+        right = ttk.Frame(self)
+        right.grid(row=2, column=1, sticky="new")
+        right.columnconfigure(0, weight=1)
+
         # ── reconstructed image preview ──────────────────────────────────────
-        preview_frame = ttk.LabelFrame(self, text="Reconstructed Image", padding=8)
-        preview_frame.grid(row=6, column=0, sticky="ew", **pad)
+        preview_frame = ttk.LabelFrame(right, text="Reconstructed Image", padding=8)
+        preview_frame.grid(row=0, column=0, sticky="ew", **pad)
         self._preview_frame = preview_frame
 
         ttk.Label(preview_frame, text="Synced").grid(row=0, column=0)
@@ -446,23 +498,9 @@ class App(tk.Tk):
         )
         self._raw_preview_label.grid(row=1, column=1)
 
-        # ── output source ────────────────────────────────────────────────────
-        src_frame = ttk.LabelFrame(self, text="Output Source", padding=8)
-        src_frame.grid(row=7, column=0, sticky="ew", **pad)
-
-        self._source_var = tk.StringVar(value="encoder")
-        ttk.Radiobutton(
-            src_frame, text="Encoder", variable=self._source_var,
-            value="encoder", command=self._on_source_change,
-        ).grid(row=0, column=0, padx=8)
-        ttk.Radiobutton(
-            src_frame, text="Decoder", variable=self._source_var,
-            value="decoder", command=self._on_source_change,
-        ).grid(row=0, column=1, padx=8)
-
         # ── decoded audio export ─────────────────────────────────────────────
-        export_frame = ttk.LabelFrame(self, text="Decoded Audio", padding=8)
-        export_frame.grid(row=8, column=0, sticky="ew", **pad)
+        export_frame = ttk.LabelFrame(right, text="Decoded Audio", padding=8)
+        export_frame.grid(row=1, column=0, sticky="ew", **pad)
         self._export_frame = export_frame
 
         self._save_audio_btn = ttk.Button(
@@ -470,24 +508,9 @@ class App(tk.Tk):
         )
         self._save_audio_btn.grid(row=0, column=0)
 
-        # ── volume ───────────────────────────────────────────────────────────
-        vol_frame = ttk.LabelFrame(self, text="Volume", padding=8)
-        vol_frame.grid(row=9, column=0, sticky="ew", **pad)
-
-        self._vol_label = ttk.Label(vol_frame, text="0 dB", width=6, anchor="e")
-        self._vol_label.grid(row=0, column=1, padx=(6, 0))
-
-        # Slider position is in dB: -60 (min) to 0 (max). Position 0 = silence.
-        self._vol_slider = ttk.Scale(
-            vol_frame, from_=-60, to=0, orient="horizontal", length=280,
-            command=self._on_volume_change,
-        )
-        self._vol_slider.set(-40)
-        self._vol_slider.grid(row=0, column=0)
-
         # ── f0 estimator ─────────────────────────────────────────────────────
-        f0_frame = ttk.LabelFrame(self, text="F0 Estimator (decode)", padding=8)
-        f0_frame.grid(row=10, column=0, sticky="ew", **pad)
+        f0_frame = ttk.LabelFrame(right, text="F0 Estimator (decode)", padding=8)
+        f0_frame.grid(row=2, column=0, sticky="ew", **pad)
 
         self._f0_mode_var = tk.StringVar(value="Manual")
         self._f0_mode_combo = ttk.Combobox(
@@ -504,8 +527,8 @@ class App(tk.Tk):
         ).grid(row=0, column=1)
 
         # ── pitch ─────────────────────────────────────────────────────────────
-        pitch_frame = ttk.LabelFrame(self, text="Pitch (Hz)", padding=8)
-        pitch_frame.grid(row=11, column=0, sticky="ew", **pad)
+        pitch_frame = ttk.LabelFrame(right, text="Pitch (Hz)", padding=8)
+        pitch_frame.grid(row=3, column=0, sticky="ew", **pad)
 
         self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
@@ -516,21 +539,6 @@ class App(tk.Tk):
         )
         self._pitch_slider.set(400)
         self._pitch_slider.grid(row=0, column=0)
-
-        # ── bits per symbol ───────────────────────────────────────────────────
-        bits_frame = ttk.LabelFrame(self, text="Bits per Symbol", padding=8)
-        bits_frame.grid(row=12, column=0, sticky="ew", **pad)
-
-        self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
-        bits_combo = ttk.Combobox(
-            bits_frame, textvariable=self._bits_var,
-            values=[str(i) for i in range(1, 9)], state="readonly", width=6,
-        )
-        bits_combo.grid(row=0, column=0, padx=8)
-        bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
-
-        # ── bottom padding ────────────────────────────────────────────────────
-        ttk.Frame(self).grid(row=13, pady=6)
 
         self._update_kind_dependent_visibility()
 
@@ -698,7 +706,7 @@ class App(tk.Tk):
     def _on_pitch_change(self, value: str) -> None:
         f0 = float(value)
         self._engine.set_f0(f0)
-        self._pitch_label.configure(text=f"{int(f0)} Hz")
+        self._pitch_label.configure(text=f"{f0:.2f} Hz")
 
     _F0_MODE_TO_KEY = {"Manual": "manual", "Autocorrelation": "autocorr", "FFT": "fft"}
 
@@ -714,7 +722,7 @@ class App(tk.Tk):
             f0 = self._engine.get_estimated_f0()
             if f0 > 0.0:
                 self._pitch_slider.set(min(max(f0, self._F0_MIN), self._F0_MAX))
-                self._pitch_label.configure(text=f"{int(round(f0))} Hz")
+                self._pitch_label.configure(text=f"{f0:.2f} Hz")
         self._signal_var.set("SIGNAL WEAK — gated" if self._engine.is_gated() else "")
         self.after(100, self._poll_estimated_f0)
 

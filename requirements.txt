@@ -5,3 +5,5 @@ matplotlib
 sounddevice
 Pillow
 pytest
+mido
+python-rtmidi
