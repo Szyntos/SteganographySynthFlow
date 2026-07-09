@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from typing import Callable, List, Optional, Tuple
@@ -17,6 +18,7 @@ try:
 except ImportError:
     sd = None
 
+from audio_callback_diag import log_callback_event
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
@@ -76,6 +78,7 @@ class DecoderEngine:
 
         self._dec_strategy = TwoSplitDecodingStrategy(settings, _make_harmonic_generator(settings))
         self._decoder: Optional[Decoder] = None
+        self._resample_method: str = "poly"
         self._rebuild_decode_chain()
 
         self._manual_f0: float = 400.0
@@ -111,7 +114,7 @@ class DecoderEngine:
             self._audio_sink = sink
             deserializer = AudioDeserializer(self._settings, sink, SerializerMode.DIGITAL)
 
-        self._decoder = Decoder(self._settings, self._dec_strategy, deserializer)
+        self._decoder = Decoder(self._settings, self._dec_strategy, deserializer, self._resample_method)
 
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:
@@ -177,6 +180,12 @@ class DecoderEngine:
     def set_pitch_quantize(self, enabled: bool) -> None:
         self._pitch_quantize = bool(enabled)
 
+    def set_resample_method(self, method: str) -> None:
+        with self._lock:
+            self._resample_method = method
+            if self._decoder is not None:
+                self._decoder.set_resample_method(method)
+
     def dump_decoded_audio_to_wav(self, file_path: str) -> None:
         with self._lock:
             if self._audio_sink is None:
@@ -213,43 +222,49 @@ class DecoderEngine:
     def is_gated(self) -> bool:
         return self._is_gated
 
-    def _callback(self, indata: np.ndarray, outdata: np.ndarray, frames: int, time, status) -> None:
-        with self._lock:
-            samples = indata[:, 0].astype(np.float32)
+    def _callback(self, indata: np.ndarray, outdata: np.ndarray, frames: int, time_info, status) -> None:
+        _cb_start = time.perf_counter()
+        try:
+            with self._lock:
+                samples = indata[:, 0].astype(np.float32)
 
-            if self._pending_skip > 0:
-                drop = min(self._pending_skip, len(samples))
-                samples = samples[drop:]
-                self._pending_skip -= drop
+                if self._pending_skip > 0:
+                    drop = min(self._pending_skip, len(samples))
+                    samples = samples[drop:]
+                    self._pending_skip -= drop
 
-            rms_now = EnergyGate.rms(samples)
-            self._is_gated = self._energy_gate.is_drop(rms_now)
-            if self._is_gated:
-                outdata[:, 0] = 0.0
-                return
+                rms_now = EnergyGate.rms(samples)
+                self._is_gated = self._energy_gate.is_drop(rms_now)
+                if self._is_gated:
+                    outdata[:, 0] = 0.0
+                    return
 
-            if self._f0_mode == "manual":
-                f_hat = self._manual_f0
-            else:
-                estimator = (
-                    self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
-                )
-                f_hat = estimator.estimate(samples, float(self._settings.fs_out))
+                if self._f0_mode == "manual":
+                    f_hat = self._manual_f0
+                else:
+                    estimator = (
+                        self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
+                    )
+                    f_hat = estimator.estimate(samples, float(self._settings.fs_out))
 
-            if self._pitch_quantize and f_hat > 0.0:
-                f_hat = quantize_to_chromatic_hz(f_hat)
+                if self._pitch_quantize and f_hat > 0.0:
+                    f_hat = quantize_to_chromatic_hz(f_hat)
 
-            if f_hat > 0.0:
-                self._last_f0_q = f_hat
-            elif self._last_f0_q > 0.0:
-                f_hat = self._last_f0_q
+                if f_hat > 0.0:
+                    self._last_f0_q = f_hat
+                elif self._last_f0_q > 0.0:
+                    f_hat = self._last_f0_q
 
-            if f_hat > 0.0:
-                self._dec_strategy.set_f0(f_hat)
+                if f_hat > 0.0:
+                    self._dec_strategy.set_f0(f_hat)
 
-            dec_chunk = self._decoder.process(AudioChunk(samples.tolist()), frames)
-            arr = np.array(dec_chunk.get_samples(), dtype=np.float32) * self._volume
-            outdata[:, 0] = arr
+                dec_chunk = self._decoder.process(AudioChunk(samples.tolist()), frames)
+                arr = np.array(dec_chunk.get_samples(), dtype=np.float32) * self._volume
+                outdata[:, 0] = arr
+        finally:
+            duration = time.perf_counter() - _cb_start
+            budget = frames / float(self._settings.fs_out)
+            log_callback_event("decoder", status, duration, budget)
 
     def start(self) -> None:
         if sd is None:
@@ -277,6 +292,12 @@ class DecoderApp(tk.Tk):
     _F0_MIN = 100.0
     _F0_MAX = 2000.0
     _IMAGE_PREVIEW_SIZE = 200
+
+    _RESAMPLE_METHOD_TO_KEY = {
+        "Polyphase (resample_poly)": "poly",
+        "Linear (continuous)": "linear",
+        "Zero-order hold (basic)": "hold",
+    }
 
     def __init__(self):
         super().__init__()
@@ -474,6 +495,18 @@ class DecoderApp(tk.Tk):
             command=self._on_quantize_change,
         ).grid(row=0, column=1)
 
+        # ── upsample method ──────────────────────────────────────────────────
+        resample_frame = ttk.LabelFrame(right, text="Symbol Upsample Method", padding=8)
+        resample_frame.grid(row=6, column=0, sticky="ew", **pad)
+
+        self._resample_method_var = tk.StringVar(value="Polyphase (resample_poly)")
+        self._resample_method_combo = ttk.Combobox(
+            resample_frame, textvariable=self._resample_method_var,
+            values=list(self._RESAMPLE_METHOD_TO_KEY.keys()), state="readonly", width=24,
+        )
+        self._resample_method_combo.grid(row=0, column=0)
+        self._resample_method_combo.bind("<<ComboboxSelected>>", self._on_resample_method_change)
+
         # ── pitch ─────────────────────────────────────────────────────────────
         pitch_frame = ttk.LabelFrame(right, text="Pitch (Hz)", padding=8)
         pitch_frame.grid(row=4, column=0, sticky="ew", **pad)
@@ -653,6 +686,10 @@ class DecoderApp(tk.Tk):
 
     def _on_quantize_change(self) -> None:
         self._engine.set_pitch_quantize(self._quantize_var.get())
+
+    def _on_resample_method_change(self, _event=None) -> None:
+        method = self._RESAMPLE_METHOD_TO_KEY[self._resample_method_var.get()]
+        self._engine.set_resample_method(method)
 
     def _update_f0_mode_visibility(self) -> None:
         is_manual = self._f0_mode_var.get() == "Manual"

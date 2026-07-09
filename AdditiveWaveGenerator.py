@@ -103,6 +103,11 @@ class AdditiveWaveGenerator:
         else:
             effective_amps = amps
 
+        # Mute harmonics that would alias past Nyquist at this f0.
+        nyquist = self._sample_rate / 2.0
+        valid_mask = (omegas * f0) <= nyquist
+        effective_amps = np.where(valid_mask, effective_amps, 0.0)
+
         samples = (effective_amps[:, None] * np.sin(phase_matrix)).sum(axis=0)
 
         # Persistent carrier phase advances by n ticks, independent of the

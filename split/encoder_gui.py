@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from typing import List, Optional, Tuple
@@ -16,6 +17,7 @@ try:
 except ImportError:
     sd = None
 
+from audio_callback_diag import log_callback_event
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Encoder import Encoder, TwoSplitEncodingStrategy
 from KeyboardNoteInput import KeyboardNoteInput
@@ -195,30 +197,36 @@ class EncoderEngine:
             self._encoding_strategy.set_f0(self._f0)
             self._encoder.set_encoding_strategy(self._encoding_strategy)
 
-    def _callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
-        with self._lock:
-            gate_active = self._midi_enabled or self._keyboard_enabled
-            note_held = True
-            if gate_active:
-                # Read the held-note stack once per audio block (chunk
-                # boundary) — set_f0 only updates the scalar frequency used
-                # by the next block; it never resets the running harmonic
-                # phases, so pitch changes stay click-free. If no note is
-                # held, keep the last f0 instead of jumping to a fallback:
-                # the encoder must keep advancing its carrier phase and
-                # payload position uninterrupted (no discontinuity when a
-                # note resumes), so silence is applied only to the output
-                # samples below, never by pausing the encoder itself.
-                midi_note = self._note_state.current_note_or(-1)
-                note_held = midi_note >= 0
-                if note_held:
-                    self.set_f0(midi_note_to_hz(midi_note))
+    def _callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
+        _cb_start = time.perf_counter()
+        try:
+            with self._lock:
+                gate_active = self._midi_enabled or self._keyboard_enabled
+                note_held = True
+                if gate_active:
+                    # Read the held-note stack once per audio block (chunk
+                    # boundary) — set_f0 only updates the scalar frequency used
+                    # by the next block; it never resets the running harmonic
+                    # phases, so pitch changes stay click-free. If no note is
+                    # held, keep the last f0 instead of jumping to a fallback:
+                    # the encoder must keep advancing its carrier phase and
+                    # payload position uninterrupted (no discontinuity when a
+                    # note resumes), so silence is applied only to the output
+                    # samples below, never by pausing the encoder itself.
+                    midi_note = self._note_state.current_note_or(-1)
+                    note_held = midi_note >= 0
+                    if note_held:
+                        self.set_f0(midi_note_to_hz(midi_note))
 
-            enc_chunk = self._encoder.process(frames)
-            arr = np.array(enc_chunk.get_samples(), dtype=np.float32) * self._volume
-            if gate_active and not note_held:
-                arr[:] = 0.0
-            outdata[:, 0] = arr
+                enc_chunk = self._encoder.process(frames)
+                arr = np.array(enc_chunk.get_samples(), dtype=np.float32) * self._volume
+                if gate_active and not note_held:
+                    arr[:] = 0.0
+                outdata[:, 0] = arr
+        finally:
+            duration = time.perf_counter() - _cb_start
+            budget = frames / float(self._settings.fs_out)
+            log_callback_event("encoder", status, duration, budget)
 
     def start(self) -> None:
         if sd is None:

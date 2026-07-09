@@ -3,15 +3,15 @@ import math
 class Settings:
     def __init__(self):
         self.fs_out: int     = 48_000
-        self.chunk_size: int = 480 * 2
+        self.chunk_size: int = 480
 
         self.audio_driver_polling_rate: int = 512
 
         self.max_driver_block_size: int = 512
 
         self.total_harmonics: int = 50
-        self.data_harmonics: int  = 49
-        self.data_offset: int     = 1
+        self.data_harmonics: int  = 40
+        self.data_offset: int     = 10
 
         self.phase_range: float = math.pi / 8
 
@@ -38,8 +38,8 @@ class Settings:
 
         self.modulator_wav_path: str = r"assets/sinesweep.wav"
         self.image_path: str = "assets/test.png"
-        self.image_target_w: int = 40
-        self.image_target_h: int = 40
+        self.image_target_w: int = 60
+        self.image_target_h: int = 60
         self.image_channels: int = 3
         self.image_mode: str = "live"
 
