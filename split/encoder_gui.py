@@ -23,10 +23,10 @@ from Encoder import Encoder, TwoSplitEncodingStrategy
 from KeyboardNoteInput import KeyboardNoteInput
 from MidiDeviceInput import MidiDeviceInput, list_midi_input_devices
 from NoteState import NoteState, midi_note_to_hz
-from Payload import AudioPayload, ImagePayload
+from Payload import AudioPayload, BinaryPayload, ImagePayload, TextPayload
 from PianoKeyboard import PianoKeyboard
 from Payload.pixel_codec import make_pixel_codec
-from Serializer import AudioSerializer, ImageSerializer
+from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextSerializer
 from SerializerMode import SerializerMode
 from Settings import Settings
 
@@ -69,6 +69,14 @@ class EncoderEngine:
         self._image_payload = ImagePayload(settings, self._image_codec)
         self._image_payload.load_from_file(self._image_path)
 
+        self._binary_path: Optional[str] = None
+        self._binary_codec = make_pixel_codec(self._codec_mode, settings)
+        self._binary_payload = BinaryPayload(settings, self._binary_codec)
+
+        self._text_path: Optional[str] = None
+        self._text_codec = make_pixel_codec(self._codec_mode, settings)
+        self._text_payload = TextPayload(settings, self._text_codec)
+
         self._encoding_strategy = self._build_audio_encoding_strategy()
         self._encoder = Encoder(self._encoding_strategy)
         self.set_f0(self._f0)
@@ -94,6 +102,31 @@ class EncoderEngine:
         strategy.load_payload(self._image_payload)
         return strategy
 
+    def _build_binary_encoding_strategy(self) -> TwoSplitEncodingStrategy:
+        serializer = BinarySerializer(self._settings, self._codec_mode)
+        strategy = TwoSplitEncodingStrategy(
+            self._settings, _make_harmonic_generator(self._settings), serializer
+        )
+        strategy.load_payload(self._binary_payload)
+        return strategy
+
+    def _build_text_encoding_strategy(self) -> TwoSplitEncodingStrategy:
+        serializer = TextSerializer(self._settings, self._codec_mode)
+        strategy = TwoSplitEncodingStrategy(
+            self._settings, _make_harmonic_generator(self._settings), serializer
+        )
+        strategy.load_payload(self._text_payload)
+        return strategy
+
+    def _build_encoding_strategy_for(self, kind: str) -> TwoSplitEncodingStrategy:
+        if kind == "audio":
+            return self._build_audio_encoding_strategy()
+        if kind == "image":
+            return self._build_image_encoding_strategy()
+        if kind == "binary":
+            return self._build_binary_encoding_strategy()
+        return self._build_text_encoding_strategy()
+
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:
         self._volume = float(vol)
@@ -105,26 +138,37 @@ class EncoderEngine:
         return self._stream is not None
 
     def set_payload_kind(self, kind: str) -> None:
-        if kind not in ("audio", "image"):
+        if kind not in ("audio", "image", "binary", "text"):
             raise ValueError(f"Unknown payload kind: {kind}")
         with self._lock:
             self._payload_kind = kind
-            self._encoding_strategy = (
-                self._build_audio_encoding_strategy() if kind == "audio"
-                else self._build_image_encoding_strategy()
-            )
+            self._encoding_strategy = self._build_encoding_strategy_for(kind)
             self._encoding_strategy.set_f0(self._f0)
             self._encoder.set_encoding_strategy(self._encoding_strategy)
 
     def set_codec_mode(self, mode: SerializerMode) -> None:
         with self._lock:
             self._codec_mode = mode
+
             self._image_codec = make_pixel_codec(mode, self._settings)
-            payload = ImagePayload(self._settings, self._image_codec)
-            payload.load_from_file(self._image_path)
-            self._image_payload = payload
-            if self._payload_kind == "image":
-                self._encoding_strategy = self._build_image_encoding_strategy()
+            image_payload = ImagePayload(self._settings, self._image_codec)
+            image_payload.load_from_file(self._image_path)
+            self._image_payload = image_payload
+
+            self._binary_codec = make_pixel_codec(mode, self._settings)
+            binary_payload = BinaryPayload(self._settings, self._binary_codec)
+            if self._binary_path is not None:
+                binary_payload.load_from_file(self._binary_path)
+            self._binary_payload = binary_payload
+
+            self._text_codec = make_pixel_codec(mode, self._settings)
+            text_payload = TextPayload(self._settings, self._text_codec)
+            if self._text_path is not None:
+                text_payload.load_from_file(self._text_path)
+            self._text_payload = text_payload
+
+            if self._payload_kind != "audio":
+                self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)
                 self._encoding_strategy.set_f0(self._f0)
                 self._encoder.set_encoding_strategy(self._encoding_strategy)
 
@@ -136,6 +180,18 @@ class EncoderEngine:
                 payload.load_from_file(file_path)
                 self._image_payload = payload
                 self._encoding_strategy = self._build_image_encoding_strategy()
+            elif self._payload_kind == "binary":
+                self._binary_path = file_path
+                payload = BinaryPayload(self._settings, self._binary_codec)
+                payload.load_from_file(file_path)
+                self._binary_payload = payload
+                self._encoding_strategy = self._build_binary_encoding_strategy()
+            elif self._payload_kind == "text":
+                self._text_path = file_path
+                payload = TextPayload(self._settings, self._text_codec)
+                payload.load_from_file(file_path)
+                self._text_payload = payload
+                self._encoding_strategy = self._build_text_encoding_strategy()
             else:
                 payload = AudioPayload()
                 payload.load_from_file(file_path)
@@ -186,14 +242,25 @@ class EncoderEngine:
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         with self._lock:
             self._settings.set_bits_per_symbol(int(bits_per_symbol))
+
             self._image_codec = make_pixel_codec(self._codec_mode, self._settings)
-            payload = ImagePayload(self._settings, self._image_codec)
-            payload.load_from_file(self._image_path)
-            self._image_payload = payload
-            self._encoding_strategy = (
-                self._build_audio_encoding_strategy() if self._payload_kind == "audio"
-                else self._build_image_encoding_strategy()
-            )
+            image_payload = ImagePayload(self._settings, self._image_codec)
+            image_payload.load_from_file(self._image_path)
+            self._image_payload = image_payload
+
+            self._binary_codec = make_pixel_codec(self._codec_mode, self._settings)
+            binary_payload = BinaryPayload(self._settings, self._binary_codec)
+            if self._binary_path is not None:
+                binary_payload.load_from_file(self._binary_path)
+            self._binary_payload = binary_payload
+
+            self._text_codec = make_pixel_codec(self._codec_mode, self._settings)
+            text_payload = TextPayload(self._settings, self._text_codec)
+            if self._text_path is not None:
+                text_payload.load_from_file(self._text_path)
+            self._text_payload = text_payload
+
+            self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)
             self._encoding_strategy.set_f0(self._f0)
             self._encoder.set_encoding_strategy(self._encoding_strategy)
 
@@ -319,6 +386,14 @@ class EncoderApp(tk.Tk):
             kind_frame, text="Image", variable=self._kind_var,
             value="image", command=self._on_kind_change,
         ).grid(row=0, column=1, padx=8)
+        ttk.Radiobutton(
+            kind_frame, text="Binary", variable=self._kind_var,
+            value="binary", command=self._on_kind_change,
+        ).grid(row=0, column=2, padx=8)
+        ttk.Radiobutton(
+            kind_frame, text="Text", variable=self._kind_var,
+            value="text", command=self._on_kind_change,
+        ).grid(row=0, column=3, padx=8)
 
         # ── payload file + position ──────────────────────────────────────────
         payload_frame = ttk.LabelFrame(left, text="Payload", padding=8)
@@ -476,13 +551,24 @@ class EncoderApp(tk.Tk):
         self._toggle_btn.configure(text="▶  Start")
 
     def _on_pick_payload(self) -> None:
-        if self._kind_var.get() == "image":
+        kind = self._kind_var.get()
+        if kind == "image":
             file_path = filedialog.askopenfilename(
                 title="Select image payload",
                 filetypes=[
                     ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
                     ("All files", "*.*"),
                 ],
+            )
+        elif kind == "text":
+            file_path = filedialog.askopenfilename(
+                title="Select text payload",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            )
+        elif kind == "binary":
+            file_path = filedialog.askopenfilename(
+                title="Select binary payload",
+                filetypes=[("All files", "*.*")],
             )
         else:
             file_path = filedialog.askopenfilename(
@@ -518,15 +604,19 @@ class EncoderApp(tk.Tk):
     def _on_kind_change(self) -> None:
         kind = self._kind_var.get()
         self._engine.set_payload_kind(kind)
-        default_name = (
-            os.path.basename(self._engine._image_path) if kind == "image"
-            else os.path.basename(self._engine._settings.modulator_wav_path)
-        )
+        if kind == "image":
+            default_name = os.path.basename(self._engine._image_path)
+        elif kind == "binary":
+            default_name = os.path.basename(self._engine._binary_path or "")
+        elif kind == "text":
+            default_name = os.path.basename(self._engine._text_path or "")
+        else:
+            default_name = os.path.basename(self._engine._settings.modulator_wav_path)
         self._payload_var.set(default_name)
         self._update_kind_dependent_visibility()
 
     def _update_kind_dependent_visibility(self) -> None:
-        state = "normal" if self._kind_var.get() == "image" else "disabled"
+        state = "normal" if self._kind_var.get() != "audio" else "disabled"
         for child in self._codec_frame.winfo_children():
             try:
                 child.configure(state=state)

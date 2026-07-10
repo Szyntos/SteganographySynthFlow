@@ -12,4 +12,4 @@ class BinaryDeserializer(Deserializer):
         super().__init__(settings, sink, serializer_mode)
 
     def deserialize_symbols(self, symbols: List[SymbolRow]) -> None:
-        pass
+        self._sink.push_many(symbols)

@@ -22,14 +22,17 @@ from audio_callback_diag import log_callback_event
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
-from Deserializer import AudioDeserializer, ImageDeserializer
+from Deserializer import AudioDeserializer, BinaryDeserializer, ImageDeserializer, TextDeserializer
 from EnergyGate import EnergyGate
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
 from Payload.pixel_codec import make_pixel_codec
 from SerializerMode import SerializerMode
 from Settings import Settings
-from Sink import AudioSink, ImageSink, RawImageSink, SinkBehaviour, SinkTee
+from Sink import (
+    AudioSink, BinarySink, ImageSink, RawBinarySink, RawImageSink, RawTextSink,
+    SinkBehaviour, SinkTee, TextSink,
+)
 
 
 def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
@@ -70,6 +73,16 @@ class DecoderEngine:
         self._raw_image_sink: Optional[RawImageSink] = None
         self._audio_sink: Optional[AudioSink] = None
         self._image_codec = make_pixel_codec(self._codec_mode, settings)
+        self._on_data: Optional[Callable] = None
+        self._binary_sink: Optional[BinarySink] = None
+        self._on_raw_data: Optional[Callable] = None
+        self._raw_binary_sink: Optional[RawBinarySink] = None
+        self._binary_codec = make_pixel_codec(self._codec_mode, settings)
+        self._on_text: Optional[Callable] = None
+        self._text_sink: Optional[TextSink] = None
+        self._on_raw_text: Optional[Callable] = None
+        self._raw_text_sink: Optional[RawTextSink] = None
+        self._text_codec = make_pixel_codec(self._codec_mode, settings)
 
         # FIFO tuning: how many input samples still to drop so the decode
         # window slides to the requested offset within a chunk.
@@ -92,6 +105,14 @@ class DecoderEngine:
         self.set_f0(400.0)
 
     def _rebuild_decode_chain(self) -> None:
+        self._image_sink = None
+        self._raw_image_sink = None
+        self._audio_sink = None
+        self._binary_sink = None
+        self._raw_binary_sink = None
+        self._text_sink = None
+        self._raw_text_sink = None
+
         if self._payload_kind == "image":
             sink = ImageSink(
                 FramingSyncController.from_settings(self._settings),
@@ -103,13 +124,36 @@ class DecoderEngine:
             self._image_sink = sink
             raw_sink = RawImageSink(self._image_codec, self._settings, on_image=self._on_raw_image)
             self._raw_image_sink = raw_sink
-            self._audio_sink = None
             deserializer = ImageDeserializer(
                 self._settings, SinkTee(sink, raw_sink), self._codec_mode
             )
+        elif self._payload_kind == "binary":
+            sink = BinarySink(
+                FramingSyncController.from_settings(self._settings),
+                self._sink_behaviour,
+                self._binary_codec,
+                on_data=self._on_data,
+            )
+            self._binary_sink = sink
+            raw_sink = RawBinarySink(self._binary_codec, on_data=self._on_raw_data)
+            self._raw_binary_sink = raw_sink
+            deserializer = BinaryDeserializer(
+                self._settings, SinkTee(sink, raw_sink), self._codec_mode
+            )
+        elif self._payload_kind == "text":
+            sink = TextSink(
+                FramingSyncController.from_settings(self._settings),
+                self._sink_behaviour,
+                self._text_codec,
+                on_text=self._on_text,
+            )
+            self._text_sink = sink
+            raw_sink = RawTextSink(self._text_codec, on_text=self._on_raw_text)
+            self._raw_text_sink = raw_sink
+            deserializer = TextDeserializer(
+                self._settings, SinkTee(sink, raw_sink), self._codec_mode
+            )
         else:
-            self._image_sink = None
-            self._raw_image_sink = None
             sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, self._settings)
             self._audio_sink = sink
             deserializer = AudioDeserializer(self._settings, sink, SerializerMode.DIGITAL)
@@ -130,7 +174,7 @@ class DecoderEngine:
         return self._stream is not None
 
     def set_payload_kind(self, kind: str) -> None:
-        if kind not in ("audio", "image"):
+        if kind not in ("audio", "image", "binary", "text"):
             raise ValueError(f"Unknown payload kind: {kind}")
         with self._lock:
             self._payload_kind = kind
@@ -141,14 +185,16 @@ class DecoderEngine:
         with self._lock:
             self._codec_mode = mode
             self._image_codec = make_pixel_codec(mode, self._settings)
-            if self._payload_kind == "image":
+            self._binary_codec = make_pixel_codec(mode, self._settings)
+            self._text_codec = make_pixel_codec(mode, self._settings)
+            if self._payload_kind != "audio":
                 self._dec_strategy.reconfigure()
                 self._rebuild_decode_chain()
 
     def set_sink_behaviour(self, behaviour: SinkBehaviour) -> None:
         with self._lock:
             self._sink_behaviour = behaviour
-            if self._payload_kind == "image":
+            if self._payload_kind != "audio":
                 self._rebuild_decode_chain()
 
     def set_on_image(self, callback: Optional[Callable]) -> None:
@@ -162,6 +208,45 @@ class DecoderEngine:
             self._on_raw_image = callback
             if self._raw_image_sink is not None:
                 self._raw_image_sink.set_on_image(callback)
+
+    def set_on_data(self, callback: Optional[Callable]) -> None:
+        with self._lock:
+            self._on_data = callback
+            if self._binary_sink is not None:
+                self._binary_sink.set_on_data(callback)
+
+    def set_on_raw_data(self, callback: Optional[Callable]) -> None:
+        with self._lock:
+            self._on_raw_data = callback
+            if self._raw_binary_sink is not None:
+                self._raw_binary_sink.set_on_data(callback)
+
+    def set_on_text(self, callback: Optional[Callable]) -> None:
+        with self._lock:
+            self._on_text = callback
+            if self._text_sink is not None:
+                self._text_sink.set_on_text(callback)
+
+    def set_on_raw_text(self, callback: Optional[Callable]) -> None:
+        with self._lock:
+            self._on_raw_text = callback
+            if self._raw_text_sink is not None:
+                self._raw_text_sink.set_on_text(callback)
+
+    def get_latest_bytes(self) -> Optional[bytes]:
+        with self._lock:
+            return self._binary_sink.get_bytes() if self._binary_sink is not None else None
+
+    def get_latest_text(self) -> Optional[str]:
+        with self._lock:
+            return self._text_sink.get_text() if self._text_sink is not None else None
+
+    def dump_decoded_bytes_to_file(self, file_path: str) -> None:
+        with self._lock:
+            if self._binary_sink is None or self._binary_sink.get_bytes() is None:
+                raise RuntimeError("No decoded binary data available yet.")
+            with open(file_path, "wb") as f:
+                f.write(self._binary_sink.get_bytes())
 
     def set_f0(self, f0: float) -> None:
         self._manual_f0 = float(f0)
@@ -196,6 +281,8 @@ class DecoderEngine:
         with self._lock:
             self._settings.set_bits_per_symbol(int(bits_per_symbol))
             self._image_codec = make_pixel_codec(self._codec_mode, self._settings)
+            self._binary_codec = make_pixel_codec(self._codec_mode, self._settings)
+            self._text_codec = make_pixel_codec(self._codec_mode, self._settings)
             self._dec_strategy.reconfigure()
             self._rebuild_decode_chain()
 
@@ -309,15 +396,22 @@ class DecoderApp(tk.Tk):
         self._engine = DecoderEngine(settings)
         self._engine.set_on_image(self._on_image_frame)
         self._engine.set_on_raw_image(self._on_raw_image_frame)
+        self._engine.set_on_data(self._on_decoded_data)
+        self._engine.set_on_raw_data(self._on_raw_decoded_data)
+        self._engine.set_on_text(self._on_decoded_text)
+        self._engine.set_on_raw_text(self._on_raw_decoded_text)
         self._running = False
         self._pending_image_frame = None
         self._pending_raw_frame = None
+        self._pending_decoded_text: Optional[str] = None
+        self._pending_raw_decoded_text: Optional[str] = None
         self._input_devices = list_devices("input")
         self._output_devices = list_devices("output")
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll_image()
+        self._poll_decoded_text()
         self._poll_estimated_f0()
 
     def _build_ui(self) -> None:
@@ -383,6 +477,14 @@ class DecoderApp(tk.Tk):
             kind_frame, text="Image", variable=self._kind_var,
             value="image", command=self._on_kind_change,
         ).grid(row=0, column=1, padx=8)
+        ttk.Radiobutton(
+            kind_frame, text="Binary", variable=self._kind_var,
+            value="binary", command=self._on_kind_change,
+        ).grid(row=0, column=2, padx=8)
+        ttk.Radiobutton(
+            kind_frame, text="Text", variable=self._kind_var,
+            value="text", command=self._on_kind_change,
+        ).grid(row=0, column=3, padx=8)
 
         # ── fifo tuning ──────────────────────────────────────────────────────
         tune_frame = ttk.LabelFrame(left, text="Window Tuning (samples)", padding=8)
@@ -463,6 +565,22 @@ class DecoderApp(tk.Tk):
         )
         self._save_audio_btn.grid(row=0, column=0)
 
+        # ── decoded binary/text output ───────────────────────────────────────
+        decoded_frame = ttk.LabelFrame(right, text="Decoded Output", padding=8)
+        decoded_frame.grid(row=1, column=1, sticky="ew", padx=(0, 16), pady=6)
+        self._decoded_frame = decoded_frame
+
+        ttk.Label(decoded_frame, text="Rolling (no sync)").grid(row=0, column=0)
+        ttk.Label(decoded_frame, text="Clean").grid(row=0, column=1)
+
+        self._raw_decoded_text = self._make_decoded_text_widget(decoded_frame, row=1, column=0)
+        self._decoded_text = self._make_decoded_text_widget(decoded_frame, row=1, column=1)
+
+        self._save_binary_btn = ttk.Button(
+            decoded_frame, text="Save clean output to file...", command=self._on_save_decoded_binary,
+        )
+        self._save_binary_btn.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+
         # ── volume ───────────────────────────────────────────────────────────
         vol_frame = ttk.LabelFrame(right, text="Monitor Volume", padding=8)
         vol_frame.grid(row=2, column=0, sticky="ew", **pad)
@@ -537,6 +655,17 @@ class DecoderApp(tk.Tk):
         self._update_kind_dependent_visibility()
         self._update_f0_mode_visibility()
 
+    @staticmethod
+    def _make_decoded_text_widget(parent: ttk.Frame, row: int, column: int) -> tk.Text:
+        container = ttk.Frame(parent)
+        container.grid(row=row, column=column, padx=(0, 8) if column == 0 else 0)
+        text = tk.Text(container, width=24, height=8, wrap="word", state="disabled")
+        text.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=text.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        text.configure(yscrollcommand=scrollbar.set)
+        return text
+
     def _selected_device(self, var: tk.StringVar, devices: List[Tuple[int, str]]) -> Optional[int]:
         name = var.get()
         for idx, dev_name in devices:
@@ -590,18 +719,41 @@ class DecoderApp(tk.Tk):
         self._pending_raw_frame = None
         self._raw_preview_photo = None
         self._raw_preview_label.configure(image="", text="(no frame yet)")
+        self._set_decoded_text(self._decoded_text, "(no data yet)")
+        self._set_decoded_text(self._raw_decoded_text, "(no data yet)")
         self._update_kind_dependent_visibility()
 
+    @staticmethod
+    def _set_decoded_text(widget: tk.Text, text: str) -> None:
+        # Tcl strings cannot contain embedded NULs; a raw decoded byte stream
+        # (e.g. the binary length-prefix header) would otherwise silently
+        # truncate everything inserted after the first \x00.
+        text = text.replace("\x00", "�")
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("1.0", text)
+        widget.see("end")
+        widget.configure(state="disabled")
+
     def _update_kind_dependent_visibility(self) -> None:
-        is_image = self._kind_var.get() == "image"
-        state = "normal" if is_image else "disabled"
-        for frame in (self._codec_frame, self._sink_frame, self._preview_frame):
+        kind = self._kind_var.get()
+        is_image = kind == "image"
+        is_binary_or_text = kind in ("binary", "text")
+        codec_state = "normal" if kind != "audio" else "disabled"
+        for frame in (self._codec_frame, self._sink_frame):
             for child in frame.winfo_children():
                 try:
-                    child.configure(state=state)
+                    child.configure(state=codec_state)
                 except tk.TclError:
                     pass
-        self._save_audio_btn.configure(state="disabled" if is_image else "normal")
+        preview_state = "normal" if is_image else "disabled"
+        for child in self._preview_frame.winfo_children():
+            try:
+                child.configure(state=preview_state)
+            except tk.TclError:
+                pass
+        self._save_audio_btn.configure(state="normal" if kind == "audio" else "disabled")
+        self._save_binary_btn.configure(state="normal" if is_binary_or_text else "disabled")
 
     def _on_save_decoded_audio(self) -> None:
         file_path = filedialog.asksaveasfilename(
@@ -615,6 +767,39 @@ class DecoderApp(tk.Tk):
             self._engine.dump_decoded_audio_to_wav(file_path)
         except Exception as exc:
             messagebox.showerror("Save Audio Error", str(exc))
+
+    def _on_decoded_data(self, data: bytes) -> None:
+        self._pending_decoded_text = f"{len(data)} bytes decoded"
+
+    def _on_raw_decoded_data(self, data: bytes) -> None:
+        self._pending_raw_decoded_text = f"...{data.hex()[-400:]}"
+
+    def _on_decoded_text(self, text: str) -> None:
+        self._pending_decoded_text = text
+
+    def _on_raw_decoded_text(self, text: str) -> None:
+        self._pending_raw_decoded_text = text
+
+    def _on_save_decoded_binary(self) -> None:
+        kind = self._kind_var.get()
+        file_path = filedialog.asksaveasfilename(
+            title="Save decoded data",
+            defaultextension=".txt" if kind == "text" else "",
+            filetypes=[("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            if kind == "text":
+                text = self._engine.get_latest_text()
+                if text is None:
+                    raise RuntimeError("No decoded text available yet.")
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            else:
+                self._engine.dump_decoded_bytes_to_file(file_path)
+        except Exception as exc:
+            messagebox.showerror("Save Data Error", str(exc))
 
     def _on_codec_change(self) -> None:
         mode = SerializerMode.DIGITAL if self._codec_var.get() == "digital" else SerializerMode.ANALOGUE
@@ -657,6 +842,15 @@ class DecoderApp(tk.Tk):
             if photo is not None:
                 self._raw_preview_photo = photo
         self.after(100, self._poll_image)
+
+    def _poll_decoded_text(self) -> None:
+        if self._pending_decoded_text is not None:
+            self._set_decoded_text(self._decoded_text, self._pending_decoded_text)
+            self._pending_decoded_text = None
+        if self._pending_raw_decoded_text is not None:
+            self._set_decoded_text(self._raw_decoded_text, self._pending_raw_decoded_text)
+            self._pending_raw_decoded_text = None
+        self.after(100, self._poll_decoded_text)
 
     def _on_bits_change(self, _event=None) -> None:
         try:
