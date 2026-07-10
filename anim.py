@@ -7,7 +7,6 @@ import matplotlib.animation as animation
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Decoder import Decoder, TwoSplitDecodingStrategy
-from Deserializer import AudioDeserializer
 from Encoder import Encoder, TwoSplitEncodingStrategy
 from Framing import FramingSyncController
 from Payload import AudioPayload
@@ -44,8 +43,7 @@ def build_and_run(settings: Settings, f0: float):
     decoding_strategy.set_f0(f0)
     framing_sync_controller = FramingSyncController()
     sink = AudioSink(framing_sync_controller, SinkBehaviour.LIVE)
-    deserializer = AudioDeserializer(settings, sink, SerializerMode.DIGITAL)
-    decoder = Decoder(settings, decoding_strategy, deserializer)
+    decoder = Decoder(settings, decoding_strategy, sink)
 
     encoded = []
     decoded = []

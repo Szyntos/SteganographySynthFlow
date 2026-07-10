@@ -6,7 +6,6 @@ from PIL import Image
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Decoder import Decoder, TwoSplitDecodingStrategy
-from Deserializer import ImageDeserializer
 from Encoder import Encoder, TwoSplitEncodingStrategy
 from Framing.FramingSyncController import FramingSyncController
 from Payload import ImagePayload
@@ -60,8 +59,7 @@ def run_audio_round_trip(mode, settings, image_path, f0=400.0, loops=2):
     # end mid-frame, leaving the latest image a barely-started canvas.
     sink = ImageSink(FramingSyncController.from_settings(settings),
                      SinkBehaviour.CLEAN, codec, settings)
-    deserializer = ImageDeserializer(settings, sink, mode)
-    decoder = Decoder(settings, decoding_strategy, deserializer)
+    decoder = Decoder(settings, decoding_strategy, sink)
 
     encoder.set_f0(f0)
     decoding_strategy.set_f0(f0)

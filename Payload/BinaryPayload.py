@@ -1,4 +1,3 @@
-import struct
 from typing import List
 
 from Payload import Payload
@@ -16,15 +15,7 @@ class BinaryPayload(Payload):
     def load_from_file(self, file_path: str):
         with open(file_path, "rb") as f:
             self._raw_bytes = f.read()
-        self._encode_rows()
-
-    def _encode_rows(self) -> None:
-        framed = struct.pack(">I", len(self._raw_bytes)) + self._raw_bytes
-        data: List[float] = []
-        step = self._codec.chunk_size
-        for offset in range(0, len(framed), step):
-            data.extend(self._codec.encode_chunk(framed[offset:offset + step]))
-        self._data = data
+        self._data = self._encode_with_codec(self._raw_bytes, self._codec)
 
     def get_data(self) -> List[float]:
         return self._data

@@ -22,7 +22,6 @@ from audio_callback_diag import log_callback_event
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, TwoSplitDecodingStrategy
-from Deserializer import AudioDeserializer, BinaryDeserializer, ImageDeserializer, TextDeserializer
 from EnergyGate import EnergyGate
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
@@ -124,9 +123,7 @@ class DecoderEngine:
             self._image_sink = sink
             raw_sink = RawImageSink(self._image_codec, self._settings, on_image=self._on_raw_image)
             self._raw_image_sink = raw_sink
-            deserializer = ImageDeserializer(
-                self._settings, SinkTee(sink, raw_sink), self._codec_mode
-            )
+            decode_sink = SinkTee(sink, raw_sink)
         elif self._payload_kind == "binary":
             sink = BinarySink(
                 FramingSyncController.from_settings(self._settings),
@@ -137,9 +134,7 @@ class DecoderEngine:
             self._binary_sink = sink
             raw_sink = RawBinarySink(self._binary_codec, on_data=self._on_raw_data)
             self._raw_binary_sink = raw_sink
-            deserializer = BinaryDeserializer(
-                self._settings, SinkTee(sink, raw_sink), self._codec_mode
-            )
+            decode_sink = SinkTee(sink, raw_sink)
         elif self._payload_kind == "text":
             sink = TextSink(
                 FramingSyncController.from_settings(self._settings),
@@ -150,15 +145,13 @@ class DecoderEngine:
             self._text_sink = sink
             raw_sink = RawTextSink(self._text_codec, on_text=self._on_raw_text)
             self._raw_text_sink = raw_sink
-            deserializer = TextDeserializer(
-                self._settings, SinkTee(sink, raw_sink), self._codec_mode
-            )
+            decode_sink = SinkTee(sink, raw_sink)
         else:
             sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, self._settings)
             self._audio_sink = sink
-            deserializer = AudioDeserializer(self._settings, sink, SerializerMode.DIGITAL)
+            decode_sink = sink
 
-        self._decoder = Decoder(self._settings, self._dec_strategy, deserializer, self._resample_method)
+        self._decoder = Decoder(self._settings, self._dec_strategy, decode_sink, self._resample_method)
 
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:

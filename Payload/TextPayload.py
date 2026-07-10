@@ -1,4 +1,3 @@
-import struct
 from typing import List
 
 from Payload import Payload
@@ -16,19 +15,11 @@ class TextPayload(Payload):
     def load_from_file(self, file_path: str):
         with open(file_path, "r", encoding="utf-8") as f:
             self._text = f.read()
-        self._encode(self._text.encode("utf-8"))
+        self._data = self._encode_with_codec(self._text.encode("utf-8"), self._codec)
 
     def load_from_string(self, text: str) -> None:
         self._text = text
-        self._encode(text.encode("utf-8"))
-
-    def _encode(self, raw_bytes: bytes) -> None:
-        framed = struct.pack(">I", len(raw_bytes)) + raw_bytes
-        data: List[float] = []
-        step = self._codec.chunk_size
-        for offset in range(0, len(framed), step):
-            data.extend(self._codec.encode_chunk(framed[offset:offset + step]))
-        self._data = data
+        self._data = self._encode_with_codec(text.encode("utf-8"), self._codec)
 
     def get_data(self) -> List[float]:
         return self._data

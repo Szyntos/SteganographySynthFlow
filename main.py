@@ -6,7 +6,6 @@ from scipy.signal import resample_poly
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from Decoder import Decoder, DecodingStrategy, TwoSplitDecodingStrategy
-from Deserializer import Deserializer, AudioDeserializer
 from Encoder import Encoder, EncodingStrategy, TwoSplitEncodingStrategy
 from Framing import FramingSyncController
 from MidiInput import MidiInput
@@ -125,8 +124,7 @@ def main():
     framing_sync_controller: FramingSyncController = FramingSyncController()
     sink: Sink = AudioSink(framing_sync_controller, SinkBehaviour.LIVE)
 
-    deserializer: Deserializer = AudioDeserializer(settings, sink, SerializerMode.DIGITAL)
-    decoder: Decoder = Decoder(settings, decoding_strategy, deserializer)
+    decoder: Decoder = Decoder(settings, decoding_strategy, sink)
 
     def on_trigger(f0: float) -> None:
         encoder.set_f0(f0)

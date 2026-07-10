@@ -4,10 +4,10 @@ import numpy as np
 from scipy.signal import resample_poly
 
 from AudioChunk import AudioChunk
-from Deserializer import Deserializer
 from Payload import SymbolRow
 from SamplesFifo import SamplesFifo
 from Settings import Settings
+from Sink import SymbolSink
 from .DecodingStrategy import DecodingStrategy
 
 
@@ -42,12 +42,12 @@ class Decoder:
             self,
             settings: Settings,
             decoding_strategy: DecodingStrategy,
-            deserializer: Deserializer,
+            sink: SymbolSink,
             resample_method: str = "poly",
     ):
         self._settings = settings
         self._decoding_strategy: DecodingStrategy = decoding_strategy
-        self._deserializer: Deserializer = deserializer
+        self._sink: SymbolSink = sink
         self._max_driver_block_size: int = 0
         self._audio_chunk_output_fifo: SamplesFifo = SamplesFifo()
         self._pending_rows: List[List[float]] = []
@@ -80,7 +80,7 @@ class Decoder:
             self._pending_rows.append(symbol_row.get_offsets())
             if len(self._pending_rows) >= self._BATCH_ROWS + self._LOOKAHEAD_ROWS:
                 self._resample_pending_rows()
-        self._deserializer.deserialize_symbols(decoded_symbols)
+        self._sink.push_many(decoded_symbols)
         return AudioChunk(self._audio_chunk_output_fifo.pop_or_silence(num_samples))
 
     def _resample_pending_rows(self) -> None:

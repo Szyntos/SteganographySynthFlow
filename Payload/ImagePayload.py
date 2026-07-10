@@ -28,14 +28,7 @@ class ImagePayload(Payload):
             image = image.resize((width, height), Image.BILINEAR)
             self._pixel_bytes = image.tobytes()
 
-        self._encode_rows()
-
-    def _encode_rows(self) -> None:
-        data: List[float] = []
-        step = self._codec.chunk_size
-        for offset in range(0, len(self._pixel_bytes), step):
-            data.extend(self._codec.encode_chunk(self._pixel_bytes[offset:offset + step]))
-        self._data = data
+        self._data = self._encode_with_codec(self._pixel_bytes, self._codec, length_prefixed=False)
 
     def get_data(self) -> List[float]:
         return self._data

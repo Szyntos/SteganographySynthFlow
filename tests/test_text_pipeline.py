@@ -1,8 +1,7 @@
-"""Serialize -> deserialize round trip at the symbol-row level (no audio DSP)."""
+"""Serialize -> sink round trip at the symbol-row level (no audio DSP)."""
 
 import pytest
 
-from Deserializer import TextDeserializer
 from Framing.FramingSyncController import FramingSyncController
 from Payload import TextPayload
 from Payload.pixel_codec import make_pixel_codec
@@ -25,25 +24,24 @@ def build_pipeline(mode, behaviour, settings, text, on_text=None):
 
     sink = TextSink(FramingSyncController.from_settings(settings),
                      behaviour, codec, on_text=on_text)
-    deserializer = TextDeserializer(settings, sink, mode)
-    return payload, serializer, sink, deserializer
+    return payload, serializer, sink
 
 
-def feed_loops(serializer, deserializer, settings, loops=1):
+def feed_loops(serializer, sink, settings, loops=1):
     size = serializer._serialized_payload.get_size()
     assert size % settings.data_harmonics == 0
     rows_per_loop = size // settings.data_harmonics
     for _ in range(rows_per_loop * loops):
-        deserializer.deserialize_symbols([serializer.get_symbol_row(settings.data_harmonics)])
+        sink.push_many([serializer.get_symbol_row(settings.data_harmonics)])
 
 
 @pytest.mark.parametrize("mode", [SerializerMode.DIGITAL, SerializerMode.ANALOGUE])
 def test_round_trip_exact(mode):
     settings = Settings()
-    payload, serializer, sink, deserializer = build_pipeline(
+    payload, serializer, sink = build_pipeline(
         mode, SinkBehaviour.LIVE, settings, TEST_TEXT)
 
-    feed_loops(serializer, deserializer, settings, loops=1)
+    feed_loops(serializer, sink, settings, loops=1)
 
     assert sink.get_text() == TEST_TEXT
 
@@ -51,10 +49,10 @@ def test_round_trip_exact(mode):
 def test_clean_sink_publishes_once_per_frame():
     settings = Settings()
     published = []
-    payload, serializer, sink, deserializer = build_pipeline(
+    payload, serializer, sink = build_pipeline(
         SerializerMode.DIGITAL, SinkBehaviour.LIVE, settings, TEST_TEXT, on_text=published.append)
 
-    feed_loops(serializer, deserializer, settings, loops=2)
+    feed_loops(serializer, sink, settings, loops=2)
 
     assert published == [TEST_TEXT, TEST_TEXT]
 
@@ -83,17 +81,17 @@ def test_raw_sink_publishes_progressively_char_by_char():
 
 def test_signal_drop_resets_cleanly():
     settings = Settings()
-    payload, serializer, sink, deserializer = build_pipeline(
+    payload, serializer, sink = build_pipeline(
         SerializerMode.DIGITAL, SinkBehaviour.LIVE, settings, TEST_TEXT)
 
     size = serializer._serialized_payload.get_size()
     rows_per_loop = size // settings.data_harmonics
     for _ in range(rows_per_loop // 2):
-        deserializer.deserialize_symbols([serializer.get_symbol_row(settings.data_harmonics)])
+        sink.push_many([serializer.get_symbol_row(settings.data_harmonics)])
     sink.on_signal_drop()
 
     assert sink.get_text() is None
 
     serializer.reset_loop()
-    feed_loops(serializer, deserializer, settings, loops=1)
+    feed_loops(serializer, sink, settings, loops=1)
     assert sink.get_text() == TEST_TEXT
