@@ -52,6 +52,14 @@ class Settings:
         self.bits_per_chunk = self.data_harmonics * bits_per_symbol
         self.bytes_per_chunk = self.bits_per_chunk // 8
 
+    def set_chunk_size(self, chunk_size: int) -> None:
+        if chunk_size <= 0 or chunk_size % 2 != 0:
+            raise ValueError("chunk_size must be a positive even integer")
+        self.chunk_size = chunk_size
+        self.pilot_size = self.chunk_size // 2
+        self.data_size = self.chunk_size // 2
+        self.MSG_FS = (self.data_harmonics * self.fs_out) // self.chunk_size
+
     def validate(self):
         if self.chunk_size % 2 != 0:
             print("chunk_size must be even")

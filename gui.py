@@ -14,8 +14,8 @@ except ImportError:
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
-from Decoder import Decoder, TwoSplitDecodingStrategy
-from Encoder import Encoder, TwoSplitEncodingStrategy
+from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
+from Encoder import Encoder, EncodingStrategy, FourSplitEncodingStrategy, TwoSplitEncodingStrategy
 from EnergyGate import EnergyGate
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
@@ -38,6 +38,17 @@ def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
     return gen
 
 
+# The 4-split strategy's decode window (chunk_size/4) is half as long as the
+# 2-split strategy's (chunk_size/2), so it needs double the chunk_size to
+# keep the same DFT bin spacing between harmonics and avoid leaking Hann
+# window energy across neighboring harmonics. See EncodingStrategy classes.
+_STRATEGY_CLASSES = {
+    "two": (TwoSplitEncodingStrategy, TwoSplitDecodingStrategy),
+    "four": (FourSplitEncodingStrategy, FourSplitDecodingStrategy),
+}
+_STRATEGY_CHUNK_SIZE_MULTIPLIER = {"two": 1, "four": 2}
+
+
 class AudioEngine:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -47,6 +58,8 @@ class AudioEngine:
         self._lock = threading.Lock()
 
         self._payload_kind: str = "audio"
+        self._strategy_kind: str = "two"
+        self._base_chunk_size: int = settings.chunk_size
         self._codec_mode: SerializerMode = SerializerMode.DIGITAL
         self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
         self._on_image: Optional[Callable] = None
@@ -80,7 +93,7 @@ class AudioEngine:
         self._text_codec = make_pixel_codec(self._codec_mode, settings)
         self._text_payload = TextPayload(settings, self._text_codec)
 
-        self._dec_strategy = TwoSplitDecodingStrategy(settings, _make_harmonic_generator(settings))
+        self._dec_strategy = self._decoding_cls()(settings, _make_harmonic_generator(settings))
 
         self._encoding_strategy = self._build_audio_encoding_strategy()
         self._encoder = Encoder(self._encoding_strategy)
@@ -115,34 +128,57 @@ class AudioEngine:
     def is_gated(self) -> bool:
         return self._is_gated
 
+    # ── strategy selection ───────────────────────────────────────────────────
+    def _encoding_cls(self):
+        return _STRATEGY_CLASSES[self._strategy_kind][0]
+
+    def _decoding_cls(self):
+        return _STRATEGY_CLASSES[self._strategy_kind][1]
+
+    def set_strategy_kind(self, kind: str) -> None:
+        if kind not in _STRATEGY_CLASSES:
+            raise ValueError(f"Unknown strategy kind: {kind}")
+        with self._lock:
+            self._strategy_kind = kind
+            self._settings.set_chunk_size(self._base_chunk_size * _STRATEGY_CHUNK_SIZE_MULTIPLIER[kind])
+
+            self._dec_strategy = self._decoding_cls()(self._settings, _make_harmonic_generator(self._settings))
+            self._dec_strategy.set_f0(self._f0)
+
+            self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)
+            self._encoding_strategy.set_f0(self._f0)
+            self._encoder.set_encoding_strategy(self._encoding_strategy)
+
+            self._rebuild_decode_chain()
+
     # ── encoding strategy construction ───────────────────────────────────────
-    def _build_audio_encoding_strategy(self) -> TwoSplitEncodingStrategy:
+    def _build_audio_encoding_strategy(self) -> EncodingStrategy:
         serializer = AudioSerializer(self._settings, SerializerMode.DIGITAL)
-        strategy = TwoSplitEncodingStrategy(
+        strategy = self._encoding_cls()(
             self._settings, _make_harmonic_generator(self._settings), serializer
         )
         strategy.load_payload(self._audio_payload)
         return strategy
 
-    def _build_image_encoding_strategy(self) -> TwoSplitEncodingStrategy:
+    def _build_image_encoding_strategy(self) -> EncodingStrategy:
         serializer = ImageSerializer(self._settings, self._codec_mode)
-        strategy = TwoSplitEncodingStrategy(
+        strategy = self._encoding_cls()(
             self._settings, _make_harmonic_generator(self._settings), serializer
         )
         strategy.load_payload(self._image_payload)
         return strategy
 
-    def _build_binary_encoding_strategy(self) -> TwoSplitEncodingStrategy:
+    def _build_binary_encoding_strategy(self) -> EncodingStrategy:
         serializer = BinarySerializer(self._settings, self._codec_mode)
-        strategy = TwoSplitEncodingStrategy(
+        strategy = self._encoding_cls()(
             self._settings, _make_harmonic_generator(self._settings), serializer
         )
         strategy.load_payload(self._binary_payload)
         return strategy
 
-    def _build_text_encoding_strategy(self) -> TwoSplitEncodingStrategy:
+    def _build_text_encoding_strategy(self) -> EncodingStrategy:
         serializer = TextSerializer(self._settings, self._codec_mode)
-        strategy = TwoSplitEncodingStrategy(
+        strategy = self._encoding_cls()(
             self._settings, _make_harmonic_generator(self._settings), serializer
         )
         strategy.load_payload(self._text_payload)
@@ -219,7 +255,7 @@ class AudioEngine:
             self._dec_strategy.reconfigure()
             self._rebuild_decode_chain()
 
-    def _build_encoding_strategy_for(self, kind: str) -> TwoSplitEncodingStrategy:
+    def _build_encoding_strategy_for(self, kind: str) -> EncodingStrategy:
         if kind == "audio":
             return self._build_audio_encoding_strategy()
         if kind == "image":
@@ -532,6 +568,20 @@ class App(tk.Tk):
             value="text", command=self._on_kind_change,
         ).grid(row=0, column=3, padx=8)
 
+        # ── split strategy ────────────────────────────────────────────────────
+        strategy_frame = ttk.LabelFrame(left, text="Split Strategy", padding=8)
+        strategy_frame.grid(row=0, column=1, sticky="ew", **pad)
+
+        self._strategy_var = tk.StringVar(value="two")
+        ttk.Radiobutton(
+            strategy_frame, text="Two-Split", variable=self._strategy_var,
+            value="two", command=self._on_strategy_change,
+        ).grid(row=0, column=0, padx=8)
+        ttk.Radiobutton(
+            strategy_frame, text="Four-Split", variable=self._strategy_var,
+            value="four", command=self._on_strategy_change,
+        ).grid(row=0, column=1, padx=8)
+
         # ── payload file + position ──────────────────────────────────────────
         payload_frame = ttk.LabelFrame(left, text="Payload", padding=8)
         payload_frame.grid(row=1, column=0, sticky="ew", **pad)
@@ -797,6 +847,9 @@ class App(tk.Tk):
             fraction = self._engine.get_position_fraction()
             self._position_slider.set(fraction * 1000.0)
         self.after(100, self._poll_position)
+
+    def _on_strategy_change(self) -> None:
+        self._engine.set_strategy_kind(self._strategy_var.get())
 
     def _on_kind_change(self) -> None:
         kind = self._kind_var.get()

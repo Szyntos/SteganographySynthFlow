@@ -1,3 +1,4 @@
 from .DecodingStrategy import DecodingStrategy
 from .TwoSplitDecodingStrategy import TwoSplitDecodingStrategy
+from .FourSplitDecodingStrategy import FourSplitDecodingStrategy
 from .Decoder import Decoder

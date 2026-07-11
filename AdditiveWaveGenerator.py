@@ -68,6 +68,7 @@ class AdditiveWaveGenerator:
         n: int,
         phase_offsets: Optional[List[float]] = None,
         amp_offsets: Optional[List[float]] = None,
+        phase_envelope: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         self._validate_state()
 
@@ -75,6 +76,8 @@ class AdditiveWaveGenerator:
             raise ValueError("phase_offsets length exceeds number of harmonics")
         if amp_offsets is not None and len(amp_offsets) > len(self._omegas):
             raise ValueError("amp_offsets length exceeds number of harmonics")
+        if phase_envelope is not None and len(phase_envelope) != n:
+            raise ValueError("phase_envelope length must equal n")
 
         if n <= 0:
             return np.zeros(0, dtype=np.float64)
@@ -94,7 +97,11 @@ class AdditiveWaveGenerator:
         if phase_offsets is not None:
             padded_phase_offsets = np.zeros(num_harmonics, dtype=np.float64)
             padded_phase_offsets[:len(phase_offsets)] = phase_offsets
-            phase_matrix += (padded_phase_offsets * self._phase_offset_range)[:, None]
+            offset_scale = (padded_phase_offsets * self._phase_offset_range)[:, None]
+            if phase_envelope is not None:
+                phase_matrix += offset_scale * np.asarray(phase_envelope, dtype=np.float64)[None, :]
+            else:
+                phase_matrix += offset_scale
 
         if amp_offsets is not None:
             padded_amp_offsets = np.zeros(num_harmonics, dtype=np.float64)

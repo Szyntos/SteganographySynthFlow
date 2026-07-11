@@ -21,7 +21,7 @@ except ImportError:
 from audio_callback_diag import log_callback_event
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
-from Decoder import Decoder, TwoSplitDecodingStrategy
+from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
 from EnergyGate import EnergyGate
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
@@ -40,6 +40,17 @@ def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
     gen.set_phases([0.0] * settings.total_harmonics)
     gen.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
     return gen
+
+
+# The 4-split strategy's decode window (chunk_size/4) is half as long as the
+# 2-split strategy's (chunk_size/2), so it needs double the chunk_size to
+# keep the same DFT bin spacing between harmonics and avoid leaking Hann
+# window energy across neighboring harmonics.
+_STRATEGY_CLASSES = {
+    "two": TwoSplitDecodingStrategy,
+    "four": FourSplitDecodingStrategy,
+}
+_STRATEGY_CHUNK_SIZE_MULTIPLIER = {"two": 1, "four": 2}
 
 
 def list_devices(kind: str) -> List[Tuple[int, str]]:
@@ -64,6 +75,8 @@ class DecoderEngine:
         self._output_device: Optional[int] = None
 
         self._payload_kind: str = "audio"
+        self._strategy_kind: str = "two"
+        self._base_chunk_size: int = settings.chunk_size
         self._codec_mode: SerializerMode = SerializerMode.DIGITAL
         self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
         self._on_image: Optional[Callable] = None
@@ -88,7 +101,7 @@ class DecoderEngine:
         self._tune_offset: int = 0
         self._pending_skip: int = 0
 
-        self._dec_strategy = TwoSplitDecodingStrategy(settings, _make_harmonic_generator(settings))
+        self._dec_strategy = self._decoding_cls()(settings, _make_harmonic_generator(settings))
         self._decoder: Optional[Decoder] = None
         self._resample_method: str = "poly"
         self._rebuild_decode_chain()
@@ -152,6 +165,23 @@ class DecoderEngine:
             decode_sink = sink
 
         self._decoder = Decoder(self._settings, self._dec_strategy, decode_sink, self._resample_method)
+
+    def _decoding_cls(self):
+        return _STRATEGY_CLASSES[self._strategy_kind]
+
+    def set_strategy_kind(self, kind: str) -> None:
+        if kind not in _STRATEGY_CLASSES:
+            raise ValueError(f"Unknown strategy kind: {kind}")
+        with self._lock:
+            self._strategy_kind = kind
+            self._settings.set_chunk_size(self._base_chunk_size * _STRATEGY_CHUNK_SIZE_MULTIPLIER[kind])
+            self._dec_strategy = self._decoding_cls()(self._settings, _make_harmonic_generator(self._settings))
+            f0 = self._manual_f0 if self._f0_mode == "manual" else self._last_f0_q
+            if f0 > 0.0:
+                self._dec_strategy.set_f0(f0)
+            self._tune_offset = 0
+            self._pending_skip = 0
+            self._rebuild_decode_chain()
 
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:
@@ -457,6 +487,20 @@ class DecoderApp(tk.Tk):
         out_combo.grid(row=1, column=1, sticky="ew")
         out_combo.bind("<<ComboboxSelected>>", self._on_device_change)
 
+        # ── split strategy ────────────────────────────────────────────────────
+        strategy_frame = ttk.LabelFrame(left, text="Split Strategy", padding=8)
+        strategy_frame.grid(row=0, column=1, sticky="ew", **pad)
+
+        self._strategy_var = tk.StringVar(value="two")
+        ttk.Radiobutton(
+            strategy_frame, text="Two-Split", variable=self._strategy_var,
+            value="two", command=self._on_strategy_change,
+        ).grid(row=0, column=0, padx=8)
+        ttk.Radiobutton(
+            strategy_frame, text="Four-Split", variable=self._strategy_var,
+            value="four", command=self._on_strategy_change,
+        ).grid(row=0, column=1, padx=8)
+
         # ── payload kind ──────────────────────────────────────────────────────
         kind_frame = ttk.LabelFrame(left, text="Payload Type", padding=8)
         kind_frame.grid(row=1, column=0, sticky="ew", **pad)
@@ -698,6 +742,12 @@ class DecoderApp(tk.Tk):
         self._running = False
         self._status_var.set("Stopped")
         self._toggle_btn.configure(text="▶  Start")
+
+    def _on_strategy_change(self) -> None:
+        self._engine.set_strategy_kind(self._strategy_var.get())
+        self._tune_slider.configure(to=self._settings.chunk_size - 1)
+        self._tune_slider.set(0)
+        self._tune_label.configure(text="0")
 
     def _on_tune_change(self, value: str) -> None:
         offset = int(float(value))
