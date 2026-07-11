@@ -34,9 +34,7 @@ class Decoder:
     # so those future rows can be included as trailing context for the
     # resample (and then discarded, not emitted) — at the cost of extra
     # output latency instead of extra ringing.
-    _BATCH_ROWS: int = 4
-    _OVERLAP_ROWS: int = 20
-    _LOOKAHEAD_ROWS: int = 4
+    # (Batch/overlap/lookahead sizes are read from settings; see reconfigure.)
 
     def __init__(
             self,
@@ -46,6 +44,9 @@ class Decoder:
             resample_method: str = "poly",
     ):
         self._settings = settings
+        self._batch_rows: int = settings.decoder_batch_rows
+        self._overlap_rows: int = settings.decoder_overlap_rows
+        self._lookahead_rows: int = settings.decoder_lookahead_rows
         self._decoding_strategy: DecodingStrategy = decoding_strategy
         self._sink: SymbolSink = sink
         self._max_driver_block_size: int = 0
@@ -78,7 +79,7 @@ class Decoder:
         decoded_symbols: List[SymbolRow] = self._decoding_strategy.decode_samples(input_samples, num_samples)
         for symbol_row in decoded_symbols:
             self._pending_rows.append(symbol_row.get_offsets())
-            if len(self._pending_rows) >= self._BATCH_ROWS + self._LOOKAHEAD_ROWS:
+            if len(self._pending_rows) >= self._batch_rows + self._lookahead_rows:
                 self._resample_pending_rows()
         self._sink.push_many(decoded_symbols)
         return AudioChunk(self._audio_chunk_output_fifo.pop_or_silence(num_samples))
@@ -88,16 +89,16 @@ class Decoder:
         chunk_size = self._decoding_strategy.get_internal_clock()
 
         # Only the first _BATCH_ROWS rows are emitted this call; the
-        # remaining _LOOKAHEAD_ROWS rows are already-decoded future data,
+        # remaining _lookahead_rows rows are already-decoded future data,
         # included below purely as trailing filter context, then left in
         # _pending_rows to be re-used (as batch or lookahead) next call.
-        emit_rows = self._pending_rows[:self._BATCH_ROWS]
-        lookahead_rows = self._pending_rows[self._BATCH_ROWS:]
+        emit_rows = self._pending_rows[:self._batch_rows]
+        lookahead_rows = self._pending_rows[self._batch_rows:]
         n_rows = len(emit_rows)
         batch: List[float] = [s for row in emit_rows for s in row]
         lookahead: List[float] = [s for row in lookahead_rows for s in row]
 
-        overlap_rows = min(self._OVERLAP_ROWS, len(self._history) // data_harmonics)
+        overlap_rows = min(self._overlap_rows, len(self._history) // data_harmonics)
         overlap_samples = overlap_rows * data_harmonics
         context = self._history[len(self._history) - overlap_samples:] if overlap_samples else []
 
@@ -110,12 +111,12 @@ class Decoder:
 
         self._audio_chunk_output_fifo.push(result.tolist())
 
-        # Carry forward up to _OVERLAP_ROWS rows of context for the next
+        # Carry forward up to _overlap_rows rows of context for the next
         # batch. Must be drawn from (context + batch), not just batch, or
-        # the history can never grow past _BATCH_ROWS rows regardless of
-        # _OVERLAP_ROWS.
+        # the history can never grow past _batch_rows rows regardless of
+        # _overlap_rows.
         full_history = context + batch
-        tail_rows = min(self._OVERLAP_ROWS, overlap_rows + n_rows)
+        tail_rows = min(self._overlap_rows, overlap_rows + n_rows)
         self._history = full_history[len(full_history) - tail_rows * data_harmonics:]
         self._pending_rows = lookahead_rows
 

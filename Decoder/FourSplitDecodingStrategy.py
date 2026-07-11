@@ -21,7 +21,7 @@ class FourSplitDecodingStrategy(DecodingStrategy):
 
     def __init__(self, settings: Settings, additive_wave_generator: AdditiveWaveGenerator):
         self._m_state: np.ndarray = np.zeros(0)
-        self._alpha: float = 1.0
+        self._alpha: float = settings.decoder_strategy_alpha
         self._mag_threshold: float = 1e-6
         self._analysis_cache_f0: float | None = None
         self._analysis_cache: tuple | None = None

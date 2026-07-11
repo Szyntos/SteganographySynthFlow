@@ -42,14 +42,14 @@ class DigitalPixelCodec:
     """Packs bits_per_symbol bits per harmonic, MSB-first, quantized to
     2**bits_per_symbol evenly-spaced levels in [-1, 1]."""
 
-    NO_DATA_EPSILON = 0.03
-
-    def __init__(self, bits_per_symbol: int, data_harmonics: int):
+    def __init__(self, bits_per_symbol: int, data_harmonics: int,
+                 bits_per_chunk: int = None, no_data_epsilon: float = 0.03):
         if not 1 <= bits_per_symbol <= 8:
             raise ValueError("DigitalPixelCodec: bits_per_symbol must be in [1, 8]")
         self._bits_per_symbol = bits_per_symbol
         self._data_harmonics = data_harmonics
-        self._bits_per_chunk = data_harmonics * bits_per_symbol
+        self._bits_per_chunk = bits_per_chunk if bits_per_chunk is not None else data_harmonics * bits_per_symbol
+        self._no_data_epsilon = no_data_epsilon
         self._max_v = (1 << bits_per_symbol) - 1
         self.chunk_size = self._bits_per_chunk // 8
         if self.chunk_size == 0:
@@ -59,7 +59,7 @@ class DigitalPixelCodec:
         return -1.0 + 2.0 * (v / self._max_v)
 
     def _level_to_v(self, x: float) -> int:
-        if abs(x) <= self.NO_DATA_EPSILON:
+        if abs(x) <= self._no_data_epsilon:
             return 0
         xc = min(max(x, -1.0), 1.0)
         return int((xc + 1.0) * 0.5 * self._max_v + 0.5)
@@ -116,7 +116,10 @@ class AnaloguePixelCodec:
 
 def make_pixel_codec(serializer_mode: SerializerMode, settings: Settings) -> PixelCodec:
     if serializer_mode == SerializerMode.DIGITAL:
-        return DigitalPixelCodec(settings.bits_per_symbol, settings.data_harmonics)
+        return DigitalPixelCodec(
+            settings.bits_per_symbol, settings.data_harmonics,
+            settings.bits_per_chunk, settings.pixel_codec_no_data_epsilon,
+        )
     if serializer_mode == SerializerMode.ANALOGUE:
         return AnaloguePixelCodec(settings.data_harmonics)
     raise ValueError(f"make_pixel_codec: unsupported mode {serializer_mode}")

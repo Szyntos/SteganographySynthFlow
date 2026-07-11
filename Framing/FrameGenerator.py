@@ -10,10 +10,16 @@ class FrameGenerator:
         self._settings: Settings = settings
 
     def get_start(self) -> List[int]:
-        return balanced_sync_bits(self._settings.sync_msg_start, self._settings.bits_per_symbol, self._settings.data_harmonics)
+        return balanced_sync_bits(
+            self._settings.sync_msg_start, self._settings.bits_per_symbol,
+            self._settings.data_harmonics, self._settings.bits_per_chunk,
+        )
 
     def get_end(self) -> List[int]:
-        return balanced_sync_bits(self._settings.sync_msg_end, self._settings.bits_per_symbol, self._settings.data_harmonics)
+        return balanced_sync_bits(
+            self._settings.sync_msg_end, self._settings.bits_per_symbol,
+            self._settings.data_harmonics, self._settings.bits_per_chunk,
+        )
 
 
 def append_value_bits_msb(out: List[int], v: int, bits_per_symbol: int) -> None:
@@ -30,6 +36,7 @@ def balanced_sync_bits(
     sync_str: str,
     bits_per_symbol: int,
     data_harmonics: int,
+    bits_per_chunk: int,
 ) -> List[int]:
     levels = 1 << bits_per_symbol
     max_v = levels - 1
@@ -53,8 +60,6 @@ def balanced_sync_bits(
 
     for h in range(data_harmonics):
         append_value_bits_msb(bits, values[h], bits_per_symbol)
-
-    bits_per_chunk: int = bits_per_symbol * data_harmonics
 
     if len(bits) < bits_per_chunk:
         bits.extend([0] * (bits_per_chunk - len(bits)))

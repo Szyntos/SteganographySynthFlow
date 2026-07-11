@@ -13,25 +13,28 @@ from Settings import Settings
 from .Sink import Sink
 from .SinkBehaviour import SinkBehaviour
 
-MAX_BUFFER_SECONDS: float = 120.0
-
 # MP3 (MPEG-1/2/2.5) only supports these sample rates.
 MP3_SAMPLE_RATES: List[int] = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]
 
 
 class AudioSink(Sink):
     """Records the decoder's raw sample stream into a rolling buffer capped
-    at MAX_BUFFER_SECONDS, so long recordings can't grow without bound.
+    at max_buffer_seconds, so long recordings can't grow without bound.
     Dumping to a file empties the buffer."""
 
     def __init__(self,
                  framing_sync_controller: FramingSyncController,
                  sink_behaviour: SinkBehaviour,
                  settings: Optional[Settings] = None,
-                 sample_rate: Optional[int] = None):
+                 sample_rate: Optional[int] = None,
+                 max_buffer_seconds: Optional[float] = None):
         super().__init__(framing_sync_controller, sink_behaviour)
         self._sample_rate = int(sample_rate if sample_rate is not None else settings.MSG_FS)
-        max_samples = int(self._sample_rate * MAX_BUFFER_SECONDS)
+        buffer_seconds = (
+            max_buffer_seconds if max_buffer_seconds is not None
+            else (settings.sink_max_buffer_seconds if settings is not None else 120.0)
+        )
+        max_samples = int(self._sample_rate * buffer_seconds)
         self._buffer: deque = deque(maxlen=max_samples)
 
     def push(self, symbol_row: SymbolRow) -> None:

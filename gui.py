@@ -16,7 +16,7 @@ from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
 from Encoder import Encoder, EncodingStrategy, FourSplitEncodingStrategy, TwoSplitEncodingStrategy
-from EnergyGate import EnergyGate
+from EnergyGate import EnergyGate, EnergyGateConfig
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
 from Framing import FramingSyncController
 from Payload import AudioPayload, BinaryPayload, ImagePayload, TextPayload
@@ -46,7 +46,6 @@ _STRATEGY_CLASSES = {
     "two": (TwoSplitEncodingStrategy, TwoSplitDecodingStrategy),
     "four": (FourSplitEncodingStrategy, FourSplitDecodingStrategy),
 }
-_STRATEGY_CHUNK_SIZE_MULTIPLIER = {"two": 1, "four": 2}
 
 
 class AudioEngine:
@@ -103,12 +102,21 @@ class AudioEngine:
 
         self._f0_mode: str = "manual"  # "manual", "autocorr", "fft"
         self._pitch_quantize: bool = False
-        self._autocorr_estimator = AutocorrF0Estimator()
-        self._fft_estimator = FFTF0Estimator()
+        self._autocorr_estimator = AutocorrF0Estimator(
+            f_min_hz=settings.autocorr_f0_min_hz, f_max_hz=settings.autocorr_f0_max_hz,
+            rms_floor=settings.autocorr_rms_floor, corr_threshold=settings.autocorr_corr_threshold,
+        )
+        self._fft_estimator = FFTF0Estimator(
+            n_fft=settings.fft_f0_n_fft, f_min_hz=settings.fft_f0_min_hz,
+            f_max_hz=settings.fft_f0_max_hz, rms_floor=settings.fft_rms_floor,
+        )
         self._last_f0_q: float = 0.0
-        self._energy_gate = EnergyGate()
+        self._energy_gate = EnergyGate(EnergyGateConfig(
+            ema_alpha=settings.energy_gate_ema_alpha, abs_floor=settings.energy_gate_abs_floor,
+            drop_ratio=settings.energy_gate_drop_ratio,
+        ))
         self._is_gated: bool = False
-        self.set_f0(400.0)
+        self.set_f0(settings.pitch_default_hz)
 
     def set_f0_estimator_mode(self, mode: str) -> None:
         if mode not in ("manual", "autocorr", "fft"):
@@ -140,7 +148,7 @@ class AudioEngine:
             raise ValueError(f"Unknown strategy kind: {kind}")
         with self._lock:
             self._strategy_kind = kind
-            self._settings.set_chunk_size(self._base_chunk_size * _STRATEGY_CHUNK_SIZE_MULTIPLIER[kind])
+            self._settings.set_chunk_size(self._base_chunk_size * self._settings.strategy_chunk_size_multiplier[kind])
 
             self._dec_strategy = self._decoding_cls()(self._settings, _make_harmonic_generator(self._settings))
             self._dec_strategy.set_f0(self._f0)
@@ -213,7 +221,9 @@ class AudioEngine:
                 on_data=self._on_data,
             )
             self._binary_sink = sink
-            raw_sink = RawBinarySink(self._binary_codec, on_data=self._on_raw_data)
+            raw_sink = RawBinarySink(
+                self._binary_codec, max_bytes=self._settings.raw_binary_sink_max_bytes, on_data=self._on_raw_data,
+            )
             self._raw_binary_sink = raw_sink
             decode_sink = SinkTee(sink, raw_sink)
         elif self._payload_kind == "text":
@@ -224,7 +234,10 @@ class AudioEngine:
                 on_text=self._on_text,
             )
             self._text_sink = sink
-            raw_sink = RawTextSink(self._text_codec, on_text=self._on_raw_text)
+            raw_sink = RawTextSink(
+                self._text_codec, max_chars=self._settings.raw_text_sink_max_chars,
+                bytes_per_char=self._settings.raw_text_sink_bytes_per_char, on_text=self._on_raw_text,
+            )
             self._raw_text_sink = raw_sink
             decode_sink = SinkTee(sink, raw_sink)
         else:
@@ -449,7 +462,7 @@ class AudioEngine:
                     f_hat = estimator.estimate(enc_arr, float(self._settings.fs_out))
 
                 if self._pitch_quantize and f_hat > 0.0:
-                    f_hat = quantize_to_chromatic_hz(f_hat)
+                    f_hat = quantize_to_chromatic_hz(f_hat, self._settings.pitch_quantizer_a4_hz)
 
                 if f_hat > 0.0:
                     self._last_f0_q = f_hat
@@ -489,16 +502,14 @@ class AudioEngine:
 
 
 class App(tk.Tk):
-    _F0_MIN = 100.0
-    _F0_MAX = 2000.0
-    _IMAGE_PREVIEW_SIZE = 200
-
     def __init__(self):
         super().__init__()
         self.title("SteganographySynthFlow")
         self.resizable(False, False)
 
         settings = Settings()
+        settings.validate()
+        self._settings = settings
         self._engine = AudioEngine(settings)
         self._engine.set_on_image(self._on_image_frame)
         self._engine.set_on_raw_image(self._on_raw_image_frame)
@@ -600,7 +611,8 @@ class App(tk.Tk):
 
         self._payload_dragging = False
         self._position_slider = ttk.Scale(
-            payload_frame, from_=0, to=1000, orient="horizontal", length=280,
+            payload_frame, from_=0, to=self._settings.position_slider_max,
+            orient="horizontal", length=self._settings.slider_length_px,
         )
         self._position_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._position_slider.bind("<ButtonPress-1>", self._on_position_drag_start)
@@ -657,12 +669,13 @@ class App(tk.Tk):
         self._vol_label = ttk.Label(vol_frame, text="0 dB", width=6, anchor="e")
         self._vol_label.grid(row=0, column=1, padx=(6, 0))
 
-        # Slider position is in dB: -60 (min) to 0 (max). Position 0 = silence.
+        # Slider position is in dB, from volume_min_db to volume_max_db. Min = silence.
         self._vol_slider = ttk.Scale(
-            vol_frame, from_=-60, to=0, orient="horizontal", length=280,
+            vol_frame, from_=self._settings.volume_min_db, to=self._settings.volume_max_db,
+            orient="horizontal", length=self._settings.slider_length_px,
             command=self._on_volume_change,
         )
-        self._vol_slider.set(-40)
+        self._vol_slider.set(self._settings.volume_default_db)
         self._vol_slider.grid(row=0, column=0)
 
         # ── bits per symbol ───────────────────────────────────────────────────
@@ -672,7 +685,8 @@ class App(tk.Tk):
         self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
             bits_frame, textvariable=self._bits_var,
-            values=[str(i) for i in range(1, 9)], state="readonly", width=6,
+            values=[str(i) for i in range(self._settings.bits_per_symbol_min, self._settings.bits_per_symbol_max + 1)],
+            state="readonly", width=6,
         )
         bits_combo.grid(row=0, column=0, padx=8)
         bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
@@ -752,14 +766,17 @@ class App(tk.Tk):
         pitch_frame = ttk.LabelFrame(right, text="Pitch (Hz)", padding=8)
         pitch_frame.grid(row=3, column=0, sticky="ew", **pad)
 
-        self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
+        self._pitch_label = ttk.Label(
+            pitch_frame, text=f"{self._settings.pitch_default_hz:.0f} Hz", width=7, anchor="e",
+        )
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
 
         self._pitch_slider = ttk.Scale(
-            pitch_frame, from_=self._F0_MIN, to=self._F0_MAX, orient="horizontal", length=280,
+            pitch_frame, from_=self._settings.pitch_min_hz, to=self._settings.pitch_max_hz,
+            orient="horizontal", length=self._settings.slider_length_px,
             command=self._on_pitch_change,
         )
-        self._pitch_slider.set(400)
+        self._pitch_slider.set(self._settings.pitch_default_hz)
         self._pitch_slider.grid(row=0, column=0)
 
         self._update_kind_dependent_visibility()
@@ -838,15 +855,15 @@ class App(tk.Tk):
         self._payload_dragging = True
 
     def _on_position_drag_end(self, _event) -> None:
-        fraction = self._position_slider.get() / 1000.0
+        fraction = self._position_slider.get() / self._settings.position_slider_max
         self._engine.set_position_fraction(fraction)
         self._payload_dragging = False
 
     def _poll_position(self) -> None:
         if not self._payload_dragging:
             fraction = self._engine.get_position_fraction()
-            self._position_slider.set(fraction * 1000.0)
-        self.after(100, self._poll_position)
+            self._position_slider.set(fraction * self._settings.position_slider_max)
+        self.after(self._settings.gui_poll_interval_ms, self._poll_position)
 
     def _on_strategy_change(self) -> None:
         self._engine.set_strategy_kind(self._strategy_var.get())
@@ -973,7 +990,7 @@ class App(tk.Tk):
         try:
             image = PILImage.frombytes(mode, (width, height), bytes(pixels))
             image = image.resize(
-                (self._IMAGE_PREVIEW_SIZE, self._IMAGE_PREVIEW_SIZE), PILImage.NEAREST
+                (self._settings.image_preview_size, self._settings.image_preview_size), PILImage.NEAREST
             )
             photo = ImageTk.PhotoImage(image)
             label.configure(image=photo, text="")
@@ -992,7 +1009,7 @@ class App(tk.Tk):
             photo = self._render_frame(raw_frame, self._raw_preview_label)
             if photo is not None:
                 self._raw_preview_photo = photo
-        self.after(100, self._poll_image)
+        self.after(self._settings.gui_poll_interval_ms, self._poll_image)
 
     def _poll_decoded_text(self) -> None:
         if self._pending_decoded_text is not None:
@@ -1001,7 +1018,7 @@ class App(tk.Tk):
         if self._pending_raw_decoded_text is not None:
             self._set_decoded_text(self._raw_decoded_text, self._pending_raw_decoded_text)
             self._pending_raw_decoded_text = None
-        self.after(100, self._poll_decoded_text)
+        self.after(self._settings.gui_poll_interval_ms, self._poll_decoded_text)
 
     def _on_bits_change(self, _event=None) -> None:
         try:
@@ -1015,13 +1032,15 @@ class App(tk.Tk):
 
     def _on_volume_change(self, value: str) -> None:
         db = float(value)
-        gain = 0.0 if db <= -60 else 10 ** (db / 20.0)
+        self._settings.volume_default_db = db
+        gain = 0.0 if db <= self._settings.volume_min_db else 10 ** (db / 20.0)
         self._engine.set_volume(gain)
-        label = "−∞ dB" if db <= -60 else f"{db:.0f} dB"
+        label = "−∞ dB" if db <= self._settings.volume_min_db else f"{db:.0f} dB"
         self._vol_label.configure(text=label)
 
     def _on_pitch_change(self, value: str) -> None:
         f0 = float(value)
+        self._settings.pitch_default_hz = f0
         self._engine.set_f0(f0)
         self._pitch_label.configure(text=f"{f0:.2f} Hz")
 
@@ -1038,10 +1057,10 @@ class App(tk.Tk):
         if self._f0_mode_var.get() != "Manual":
             f0 = self._engine.get_estimated_f0()
             if f0 > 0.0:
-                self._pitch_slider.set(min(max(f0, self._F0_MIN), self._F0_MAX))
+                self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
                 self._pitch_label.configure(text=f"{f0:.2f} Hz")
         self._signal_var.set("SIGNAL WEAK — gated" if self._engine.is_gated() else "")
-        self.after(100, self._poll_estimated_f0)
+        self.after(self._settings.gui_poll_interval_ms, self._poll_estimated_f0)
 
     def _on_close(self) -> None:
         self._stop()

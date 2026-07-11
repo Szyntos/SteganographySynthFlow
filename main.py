@@ -16,6 +16,7 @@ from Settings import Settings
 from Sink import SinkBehaviour, AudioSink, Sink
 
 settings: Settings = Settings()
+settings.validate()
 
 def harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
     additive_wave_generator: AdditiveWaveGenerator = AdditiveWaveGenerator(settings)

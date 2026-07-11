@@ -30,7 +30,12 @@ class ImageSink(FramedByteSink):
 
         self._merge_policy: Optional[TemporalMergePolicy] = None
         if sink_behaviour == SinkBehaviour.CLEAN:
-            self._merge_policy = merge_policy if merge_policy is not None else TemporalMergePolicy()
+            self._merge_policy = merge_policy if merge_policy is not None else TemporalMergePolicy(
+                blend_n=settings.temporal_merge_blend_n,
+                replace_similarity_threshold=settings.temporal_merge_replace_similarity_threshold,
+                replace_min_coverage=settings.temporal_merge_replace_min_coverage,
+                similarity_scale=settings.temporal_merge_similarity_scale,
+            )
 
         self._on_image = on_image
         self._latest_image: Optional[ImageFrame] = None

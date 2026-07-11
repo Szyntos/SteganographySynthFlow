@@ -10,17 +10,17 @@ class RawTextSink(RawSink[str]):
     framed TextSink to show what the decoder sees before frame
     synchronisation, one character at a time as bytes arrive."""
 
-    # UTF-8 code points are at most 4 bytes; over-allocate the raw buffer so a
-    # trailing partial multi-byte sequence never truncates a real character.
-    _BYTES_PER_CHAR = 4
-
     def __init__(self,
                  codec: PixelCodec,
                  max_chars: int = 200,
+                 bytes_per_char: int = 4,
                  on_text: Optional[Callable[[str], None]] = None):
         super().__init__(codec, on_result=on_text)
         self._max_chars = max_chars
-        self._max_bytes = max_chars * self._BYTES_PER_CHAR
+        # UTF-8 code points are at most bytes_per_char bytes; over-allocate the
+        # raw buffer so a trailing partial multi-byte sequence never truncates
+        # a real character.
+        self._max_bytes = max_chars * bytes_per_char
 
     def get_latest_text(self) -> str:
         return self._render()

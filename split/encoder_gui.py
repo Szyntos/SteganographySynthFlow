@@ -47,7 +47,6 @@ _STRATEGY_CLASSES = {
     "two": TwoSplitEncodingStrategy,
     "four": FourSplitEncodingStrategy,
 }
-_STRATEGY_CHUNK_SIZE_MULTIPLIER = {"two": 1, "four": 2}
 
 
 def list_output_devices() -> List[Tuple[int, str]]:
@@ -72,7 +71,7 @@ class EncoderEngine:
         self._strategy_kind: str = "two"
         self._base_chunk_size: int = settings.chunk_size
         self._codec_mode: SerializerMode = SerializerMode.DIGITAL
-        self._f0: float = 400.0
+        self._f0: float = settings.pitch_default_hz
 
         self._audio_payload = AudioPayload()
         self._audio_payload.load_from_file(settings.modulator_wav_path)
@@ -166,7 +165,7 @@ class EncoderEngine:
             raise ValueError(f"Unknown strategy kind: {kind}")
         with self._lock:
             self._strategy_kind = kind
-            self._settings.set_chunk_size(self._base_chunk_size * _STRATEGY_CHUNK_SIZE_MULTIPLIER[kind])
+            self._settings.set_chunk_size(self._base_chunk_size * self._settings.strategy_chunk_size_multiplier[kind])
             self._wave_generator = _make_harmonic_generator(self._settings)
             for payload_kind in ("audio", "image", "binary", "text"):
                 self._rebuild_strategy_for(payload_kind)
@@ -356,15 +355,14 @@ class EncoderEngine:
 
 
 class EncoderApp(tk.Tk):
-    _F0_MIN = 100.0
-    _F0_MAX = 2000.0
-
     def __init__(self):
         super().__init__()
         self.title("SSF Encoder")
         self.resizable(False, False)
 
         settings = Settings()
+        settings.validate()
+        self._settings = settings
         self._engine = EncoderEngine(settings)
         self._running = False
         self._devices = list_output_devices()
@@ -462,7 +460,8 @@ class EncoderApp(tk.Tk):
 
         self._payload_dragging = False
         self._position_slider = ttk.Scale(
-            payload_frame, from_=0, to=1000, orient="horizontal", length=280,
+            payload_frame, from_=0, to=self._settings.position_slider_max,
+            orient="horizontal", length=self._settings.slider_length_px,
         )
         self._position_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._position_slider.bind("<ButtonPress-1>", self._on_position_drag_start)
@@ -491,10 +490,11 @@ class EncoderApp(tk.Tk):
         self._vol_label.grid(row=0, column=1, padx=(6, 0))
 
         self._vol_slider = ttk.Scale(
-            vol_frame, from_=-60, to=0, orient="horizontal", length=280,
+            vol_frame, from_=self._settings.volume_min_db, to=self._settings.volume_max_db,
+            orient="horizontal", length=self._settings.slider_length_px,
             command=self._on_volume_change,
         )
-        self._vol_slider.set(-40)
+        self._vol_slider.set(self._settings.volume_default_db)
         self._vol_slider.grid(row=0, column=0)
 
         # ── bits per symbol ───────────────────────────────────────────────────
@@ -504,7 +504,8 @@ class EncoderApp(tk.Tk):
         self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
             bits_frame, textvariable=self._bits_var,
-            values=[str(i) for i in range(1, 9)], state="readonly", width=6,
+            values=[str(i) for i in range(self._settings.bits_per_symbol_min, self._settings.bits_per_symbol_max + 1)],
+            state="readonly", width=6,
         )
         bits_combo.grid(row=0, column=0, padx=8)
         bits_combo.bind("<<ComboboxSelected>>", self._on_bits_change)
@@ -544,21 +545,26 @@ class EncoderApp(tk.Tk):
             variable=self._keyboard_enabled_var, command=self._on_keyboard_toggle,
         ).grid(row=0, column=0, sticky="w")
 
-        self._piano = PianoKeyboard(kbd_frame, low_note=60, high_note=88)
+        self._piano = PianoKeyboard(
+            kbd_frame, low_note=self._settings.piano_low_note, high_note=self._settings.piano_high_note,
+        )
         self._piano.grid(row=1, column=0, sticky="w", pady=(8, 0))
 
         # ── pitch ─────────────────────────────────────────────────────────────
         pitch_frame = ttk.LabelFrame(right, text="Pitch (Hz)", padding=8)
         pitch_frame.grid(row=2, column=0, sticky="ew", **pad)
 
-        self._pitch_label = ttk.Label(pitch_frame, text="400 Hz", width=7, anchor="e")
+        self._pitch_label = ttk.Label(
+            pitch_frame, text=f"{self._settings.pitch_default_hz:.0f} Hz", width=7, anchor="e",
+        )
         self._pitch_label.grid(row=0, column=1, padx=(6, 0))
 
         self._pitch_slider = ttk.Scale(
-            pitch_frame, from_=self._F0_MIN, to=self._F0_MAX, orient="horizontal", length=280,
+            pitch_frame, from_=self._settings.pitch_min_hz, to=self._settings.pitch_max_hz,
+            orient="horizontal", length=self._settings.slider_length_px,
             command=self._on_pitch_change,
         )
-        self._pitch_slider.set(400)
+        self._pitch_slider.set(self._settings.pitch_default_hz)
         self._pitch_slider.grid(row=0, column=0)
 
         self._update_kind_dependent_visibility()
@@ -641,15 +647,15 @@ class EncoderApp(tk.Tk):
         self._payload_dragging = True
 
     def _on_position_drag_end(self, _event) -> None:
-        fraction = self._position_slider.get() / 1000.0
+        fraction = self._position_slider.get() / self._settings.position_slider_max
         self._engine.set_position_fraction(fraction)
         self._payload_dragging = False
 
     def _poll_position(self) -> None:
         if not self._payload_dragging:
             fraction = self._engine.get_position_fraction()
-            self._position_slider.set(fraction * 1000.0)
-        self.after(100, self._poll_position)
+            self._position_slider.set(fraction * self._settings.position_slider_max)
+        self.after(self._settings.gui_poll_interval_ms, self._poll_position)
 
     def _on_strategy_change(self) -> None:
         self._engine.set_strategy_kind(self._strategy_var.get())
@@ -689,13 +695,15 @@ class EncoderApp(tk.Tk):
 
     def _on_volume_change(self, value: str) -> None:
         db = float(value)
-        gain = 0.0 if db <= -60 else 10 ** (db / 20.0)
+        self._settings.volume_default_db = db
+        gain = 0.0 if db <= self._settings.volume_min_db else 10 ** (db / 20.0)
         self._engine.set_volume(gain)
-        label = "−∞ dB" if db <= -60 else f"{db:.0f} dB"
+        label = "−∞ dB" if db <= self._settings.volume_min_db else f"{db:.0f} dB"
         self._vol_label.configure(text=label)
 
     def _on_pitch_change(self, value: str) -> None:
         f0 = float(value)
+        self._settings.pitch_default_hz = f0
         self._engine.set_f0(f0)
         self._pitch_label.configure(text=f"{f0:.2f} Hz")
 
@@ -730,10 +738,10 @@ class EncoderApp(tk.Tk):
     def _poll_note_control(self) -> None:
         if self._midi_enabled_var.get() or self._keyboard_enabled_var.get():
             f0 = self._engine.get_f0()
-            self._pitch_slider.set(min(max(f0, self._F0_MIN), self._F0_MAX))
+            self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
             self._pitch_label.configure(text=f"{f0:.2f} Hz")
         self._piano.set_active_note(self._engine.get_active_note())
-        self.after(50, self._poll_note_control)
+        self.after(self._settings.gui_note_poll_interval_ms, self._poll_note_control)
 
     def _on_close(self) -> None:
         self._keyboard_input.disable()
