@@ -15,6 +15,7 @@ except ImportError:
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
+from DropTolerance import DropAction, DropTolerance, DropToleranceConfig
 from Encoder import Encoder, EncodingStrategy, FourSplitEncodingStrategy, TwoSplitEncodingStrategy
 from EnergyGate import EnergyGate, EnergyGateConfig
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
@@ -111,9 +112,13 @@ class AudioEngine:
             f_max_hz=settings.fft_f0_max_hz, rms_floor=settings.fft_rms_floor,
         )
         self._last_f0_q: float = 0.0
+        self._last_confidence: float = 0.0
         self._energy_gate = EnergyGate(EnergyGateConfig(
             ema_alpha=settings.energy_gate_ema_alpha, abs_floor=settings.energy_gate_abs_floor,
             drop_ratio=settings.energy_gate_drop_ratio,
+        ))
+        self._drop_tolerance = DropTolerance(DropToleranceConfig(
+            tolerance_chunks=settings.drop_tolerance_chunks,
         ))
         self._is_gated: bool = False
         self.set_f0(settings.pitch_default_hz)
@@ -132,6 +137,21 @@ class AudioEngine:
 
     def get_estimated_f0(self) -> float:
         return self._last_f0_q
+
+    def get_confidence(self) -> float:
+        return self._last_confidence
+
+    def get_drop_run(self) -> int:
+        return self._drop_tolerance.drop_run
+
+    def _handle_missing(self, n_samples: int) -> list:
+        action = self._drop_tolerance.push(True)
+        if action == DropAction.RESET_NOW:
+            self._dec_strategy.reconfigure()
+            self._autocorr_estimator.reset()
+            self._fft_estimator.reset()
+            self._last_f0_q = 0.0
+        return [0.0] * n_samples
 
     def is_gated(self) -> bool:
         return self._is_gated
@@ -451,15 +471,17 @@ class AudioEngine:
             self._is_gated = self._energy_gate.is_drop(rms_now)
 
             if self._is_gated:
-                dec_samples = [0.0] * len(enc_samples)
+                dec_samples = self._handle_missing(len(enc_samples))
             else:
                 if self._f0_mode == "manual":
                     f_hat = self._f0
+                    self._last_confidence = 1.0
                 else:
                     estimator = (
                         self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
                     )
                     f_hat = estimator.estimate(enc_arr, float(self._settings.fs_out))
+                    self._last_confidence = estimator.confidence
 
                 if self._pitch_quantize and f_hat > 0.0:
                     f_hat = quantize_to_chromatic_hz(f_hat, self._settings.pitch_quantizer_a4_hz)
@@ -469,11 +491,13 @@ class AudioEngine:
                 elif self._last_f0_q > 0.0:
                     f_hat = self._last_f0_q
 
-                if f_hat > 0.0:
+                if f_hat <= 0.0:
+                    dec_samples = self._handle_missing(len(enc_samples))
+                else:
+                    self._drop_tolerance.push(False)
                     self._dec_strategy.set_f0(f_hat)
-
-                dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
-                dec_samples = dec_chunk.get_samples()
+                    dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
+                    dec_samples = dec_chunk.get_samples()
 
             samples = enc_samples if self._source == "encoder" else dec_samples
             arr = np.array(samples, dtype=np.float32) * self._volume
@@ -483,6 +507,7 @@ class AudioEngine:
         if sd is None:
             raise RuntimeError("sounddevice is not installed.\nRun: pip install sounddevice")
         self._energy_gate.reset()
+        self._drop_tolerance.reset()
         self._is_gated = False
         block_size = self._settings.audio_driver_polling_rate
         self._stream = sd.OutputStream(
@@ -1054,12 +1079,20 @@ class App(tk.Tk):
         self._engine.set_pitch_quantize(self._quantize_var.get())
 
     def _poll_estimated_f0(self) -> None:
-        if self._f0_mode_var.get() != "Manual":
+        is_manual = self._f0_mode_var.get() == "Manual"
+        if not is_manual:
             f0 = self._engine.get_estimated_f0()
             if f0 > 0.0:
                 self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
                 self._pitch_label.configure(text=f"{f0:.2f} Hz")
-        self._signal_var.set("SIGNAL WEAK — gated" if self._engine.is_gated() else "")
+
+        drop_run = self._engine.get_drop_run()
+        if self._engine.is_gated() or drop_run > 0:
+            self._signal_var.set(f"SIGNAL WEAK — drop {drop_run}/{self._settings.drop_tolerance_chunks}")
+        elif not is_manual:
+            self._signal_var.set(f"confidence {self._engine.get_confidence():.2f}")
+        else:
+            self._signal_var.set("")
         self.after(self._settings.gui_poll_interval_ms, self._poll_estimated_f0)
 
     def _on_close(self) -> None:

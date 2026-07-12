@@ -23,6 +23,7 @@ class FFTF0Estimator(F0Estimator):
     ):
         if n_fft <= 0 or (n_fft & (n_fft - 1)) != 0:
             raise ValueError("n_fft must be a power of 2")
+        super().__init__()
         self._n_fft = n_fft
         self._f_min_hz = f_min_hz
         self._f_max_hz = f_max_hz
@@ -30,6 +31,8 @@ class FFTF0Estimator(F0Estimator):
         self._use_pilot_half = use_pilot_half
 
     def estimate(self, samples: np.ndarray, fs: float) -> float:
+        self._last_confidence = 0.0
+
         n = len(samples)
         length = n // 2 if self._use_pilot_half else n
         if length < 2:
@@ -69,7 +72,18 @@ class FFTF0Estimator(F0Estimator):
         if not (best_mag > 0.0):
             return 0.0
 
+        # Confidence is the peak bin's share of total magnitude in the
+        # search band, in [0, 1]: near 1 for a single sharp tone, near
+        # 1/len(window_slice) for flat noise. Unlike the correlation-based
+        # autocorr estimator, the FFT estimator has no threshold gate on
+        # this value elsewhere, so it always "confidently" reports the
+        # loudest bin even under noise; this exposes how weak that peak
+        # actually was.
+        total_mag = float(np.sum(window_slice)) + 1e-18
+        self._last_confidence = float(best_mag) / total_mag
+
         f0 = best_k * fs / n_fft
         if not math.isfinite(f0) or f0 < self._f_min_hz or f0 > self._f_max_hz:
+            self._last_confidence = 0.0
             return 0.0
         return f0

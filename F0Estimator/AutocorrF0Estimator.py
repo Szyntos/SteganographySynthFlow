@@ -20,6 +20,7 @@ class AutocorrF0Estimator(F0Estimator):
         use_pilot_half: bool = True,
         corr_threshold: float = 0.2,
     ):
+        super().__init__()
         self._f_min_hz = f_min_hz
         self._f_max_hz = f_max_hz
         self._rms_floor = rms_floor
@@ -27,6 +28,8 @@ class AutocorrF0Estimator(F0Estimator):
         self._corr_threshold = corr_threshold
 
     def estimate(self, samples: np.ndarray, fs: float) -> float:
+        self._last_confidence = 0.0
+
         n = len(samples)
         length = n // 2 if self._use_pilot_half else n
         if length < 16:
@@ -64,10 +67,17 @@ class AutocorrF0Estimator(F0Estimator):
                 best_r = r
                 best_lag = lag
 
+        # Confidence is the peak normalized-autocorrelation coefficient
+        # itself (roughly [0, 1] for periodic signals); exposed even when
+        # the estimate is rejected below, so a near-miss (e.g. r=0.18
+        # against a 0.2 threshold) is distinguishable from silence (r=0).
+        self._last_confidence = max(0.0, best_r)
+
         if best_r <= self._corr_threshold or best_lag <= 0:
             return 0.0
 
         f0 = fs / best_lag
         if not math.isfinite(f0) or f0 < fmin or f0 > fmax:
+            self._last_confidence = 0.0
             return 0.0
         return f0

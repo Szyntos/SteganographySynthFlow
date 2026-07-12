@@ -74,6 +74,10 @@ class Settings:
         self.energy_gate_abs_floor: float = 1e-6
         self.energy_gate_drop_ratio: float = 0.25
 
+        # DropTolerance: consecutive missing/gated chunks tolerated (mock
+        # silence fed, no reset) before a hard decoder-state reset fires.
+        self.drop_tolerance_chunks: int = 3
+
         # F0 estimators
         self.autocorr_f0_min_hz: float = 200.0
         self.autocorr_f0_max_hz: float = 1200.0
@@ -165,3 +169,5 @@ class Settings:
             raise ValueError("volume_default_db must be within [volume_min_db, volume_max_db]")
         if not (self.piano_low_note < self.piano_high_note):
             raise ValueError("piano_low_note must be < piano_high_note")
+        if self.drop_tolerance_chunks < 0:
+            raise ValueError("drop_tolerance_chunks must be >= 0")
