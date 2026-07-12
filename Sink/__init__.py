@@ -4,10 +4,11 @@ from .BufferedFramedSink import BufferedFramedSink
 from .FramedByteSink import FramedByteSink
 from .ImageSink import ImageSink
 from .RawBinarySink import RawBinarySink
-from .RawImageSink import RawImageSink, SinkTee
+from .RawImageSink import RawImageSink
 from .RawSink import RawSink
 from .RawTextSink import RawTextSink
 from .Sink import Sink
 from .SinkBehaviour import SinkBehaviour
+from .SinkTee import SinkTee
 from .SymbolSink import SymbolSink
 from .TextSink import TextSink

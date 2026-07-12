@@ -19,7 +19,6 @@ except ImportError:
     sd = None
 
 from audio_callback_diag import log_callback_event
-from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
 from DropTolerance import DropAction, DropTolerance, DropToleranceConfig
@@ -33,14 +32,6 @@ from Sink import (
     AudioSink, BinarySink, ImageSink, RawBinarySink, RawImageSink, RawTextSink,
     SinkBehaviour, SinkTee, TextSink,
 )
-
-
-def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
-    gen = AdditiveWaveGenerator(settings)
-    gen.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
-    gen.set_phases([0.0] * settings.total_harmonics)
-    gen.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
-    return gen
 
 
 # The 4-split strategy's decode window (chunk_size/4) is half as long as the
@@ -101,7 +92,7 @@ class DecoderEngine:
         self._tune_offset: int = 0
         self._pending_skip: int = 0
 
-        self._dec_strategy = self._decoding_cls()(settings, _make_harmonic_generator(settings))
+        self._dec_strategy = self._decoding_cls()(settings)
         self._decoder: Optional[Decoder] = None
         self._resample_method: str = "poly"
         self._rebuild_decode_chain()
@@ -193,7 +184,7 @@ class DecoderEngine:
         with self._lock:
             self._strategy_kind = kind
             self._settings.set_chunk_size(self._base_chunk_size * self._settings.strategy_chunk_size_multiplier[kind])
-            self._dec_strategy = self._decoding_cls()(self._settings, _make_harmonic_generator(self._settings))
+            self._dec_strategy = self._decoding_cls()(self._settings)
             f0 = self._manual_f0 if self._f0_mode == "manual" else self._last_f0_q
             if f0 > 0.0:
                 self._dec_strategy.set_f0(f0)

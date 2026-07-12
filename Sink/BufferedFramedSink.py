@@ -1,4 +1,5 @@
 import struct
+from abc import abstractmethod
 from typing import Callable, Generic, List, Optional, TypeVar
 
 from Framing import FramingSyncController
@@ -54,5 +55,6 @@ class BufferedFramedSink(FramedByteSink, Generic[T]):
         if self._on_result is not None:
             self._on_result(self._latest_result)
 
+    @abstractmethod
     def _transform(self, raw: bytes) -> T:
-        raise NotImplementedError
+        """Turn the raw length-prefixed payload bytes into the published result type."""

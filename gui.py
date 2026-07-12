@@ -93,7 +93,7 @@ class AudioEngine:
         self._text_codec = make_pixel_codec(self._codec_mode, settings)
         self._text_payload = TextPayload(settings, self._text_codec)
 
-        self._dec_strategy = self._decoding_cls()(settings, _make_harmonic_generator(settings))
+        self._dec_strategy = self._decoding_cls()(settings)
 
         self._encoding_strategy = self._build_audio_encoding_strategy()
         self._encoder = Encoder(self._encoding_strategy)
@@ -170,7 +170,7 @@ class AudioEngine:
             self._strategy_kind = kind
             self._settings.set_chunk_size(self._base_chunk_size * self._settings.strategy_chunk_size_multiplier[kind])
 
-            self._dec_strategy = self._decoding_cls()(self._settings, _make_harmonic_generator(self._settings))
+            self._dec_strategy = self._decoding_cls()(self._settings)
             self._dec_strategy.set_f0(self._f0)
 
             self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)

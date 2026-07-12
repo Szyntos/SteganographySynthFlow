@@ -71,7 +71,7 @@ def render(encoder: Encoder, settings: Settings, num_chunks: int) -> np.ndarray:
 
 
 def build_decoder(settings: Settings) -> tuple[Decoder, TwoSplitDecodingStrategy]:
-    decoding_strategy = TwoSplitDecodingStrategy(settings, harmonic_generator(settings))
+    decoding_strategy = TwoSplitDecodingStrategy(settings)
     decoding_strategy.set_f0(F0)
     sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, settings=settings)
     decoder = Decoder(settings, decoding_strategy, sink)

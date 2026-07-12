@@ -43,6 +43,11 @@ class RawSink(ABC, Generic[T]):
         if self._on_result is not None:
             self._on_result(self._latest_result)
 
+    def on_signal_drop(self) -> None:
+        """No-op: RawSink is a framing-free preview with no frame state to
+        reset on a signal drop. Present so callers that treat sinks
+        uniformly (e.g. via SymbolSink) don't need to special-case it."""
+
     @abstractmethod
     def _cap(self) -> None:
         """Keep self._buffer bounded to whatever window this sink previews."""

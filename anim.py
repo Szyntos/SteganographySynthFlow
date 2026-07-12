@@ -39,7 +39,7 @@ def build_and_run(settings: Settings, f0: float):
     encoder = Encoder(encoding_strategy)
     encoder.set_f0(f0)
 
-    decoding_strategy = TwoSplitDecodingStrategy(settings, harmonic_generator(settings))
+    decoding_strategy = TwoSplitDecodingStrategy(settings)
     decoding_strategy.set_f0(f0)
     framing_sync_controller = FramingSyncController()
     sink = AudioSink(framing_sync_controller, SinkBehaviour.LIVE)

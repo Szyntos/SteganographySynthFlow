@@ -53,7 +53,7 @@ def run_audio_round_trip(mode, settings, image_path, f0=400.0, loops=2):
     encoding_strategy.load_payload(payload)
     encoder = Encoder(encoding_strategy)
 
-    decoding_strategy = TwoSplitDecodingStrategy(settings, make_harmonic_generator(settings))
+    decoding_strategy = TwoSplitDecodingStrategy(settings)
     # CLEAN publishes once per finalized frame, so get_latest_image() is a
     # complete frame. LIVE publishes after every row write, and the stream may
     # end mid-frame, leaving the latest image a barely-started canvas.

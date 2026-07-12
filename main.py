@@ -120,7 +120,7 @@ def main():
 
     encoder: Encoder = Encoder(encoding_strategy)
 
-    decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(settings, harmonic_generator(settings))
+    decoding_strategy: DecodingStrategy = TwoSplitDecodingStrategy(settings)
 
     framing_sync_controller: FramingSyncController = FramingSyncController()
     sink: Sink = AudioSink(framing_sync_controller, SinkBehaviour.LIVE)
