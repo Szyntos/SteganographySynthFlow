@@ -245,6 +245,7 @@ class Settings:
         self.sink = SinkSettings()
         self.temporal_merge = TemporalMergeSettings()
         self.pixel_codec = PixelCodecSettings()
+        self._check_group_name_uniqueness()
 
     def _groups(self):
         return (
@@ -253,10 +254,35 @@ class Settings:
             self.sink, self.temporal_merge, self.pixel_codec,
         )
 
+    def _check_group_name_uniqueness(self) -> None:
+        # Flat delegation below silently picks the first group that has a
+        # given name; catch collisions here instead, at construction time.
+        seen: dict = {}
+        for group in self._groups():
+            for name in vars(group):
+                if name in seen and seen[name] is not group.__class__:
+                    raise RuntimeError(
+                        f"Settings attribute name collision: '{name}' is defined "
+                        f"in both {seen[name].__name__} and {group.__class__.__name__}"
+                    )
+                seen[name] = group.__class__
+
+    @staticmethod
+    def _group_has_own_attr(group, name: str) -> bool:
+        # Deliberately not `hasattr`: hasattr() swallows ANY exception raised
+        # while evaluating the attribute (not just AttributeError), which
+        # would mask a genuine bug in a sub-config property as "not found
+        # here, try the next group".
+        try:
+            object.__getattribute__(group, name)
+        except AttributeError:
+            return False
+        return True
+
     def __getattr__(self, name: str):
         # Only invoked when normal lookup fails, i.e. for flat legacy names.
         for group in object.__getattribute__(self, "_groups")():
-            if hasattr(group, name):
+            if self._group_has_own_attr(group, name):
                 return getattr(group, name)
         raise AttributeError(name)
 
@@ -265,7 +291,7 @@ class Settings:
             object.__setattr__(self, name, value)
             return
         for group in self._groups():
-            if hasattr(group, name):
+            if self._group_has_own_attr(group, name):
                 setattr(group, name, value)
                 return
         object.__setattr__(self, name, value)

@@ -21,5 +21,4 @@ class AudioPayload(Payload):
         return self._sample_rate
 
     def get_data(self) -> List[float]:
-        # return [0.0] * len(self._data)
         return self._data

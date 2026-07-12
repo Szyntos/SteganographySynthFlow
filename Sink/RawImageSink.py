@@ -32,16 +32,21 @@ class RawImageSink(RawSink[ImageFrame]):
 
     def _cap(self) -> None:
         # The canvas is a fixed-size ring buffer: fold whatever push() just
-        # appended past the end back onto the front, byte by byte, wrapping
-        # at _write_offset exactly as the original in-place ring write did.
+        # appended past the end back onto the front, wrapping at
+        # _write_offset exactly as the original in-place ring write did.
         excess = len(self._buffer) - self._expected_bytes
         if excess <= 0:
             return
         overflow = bytes(self._buffer[self._expected_bytes:])
         del self._buffer[self._expected_bytes:]
-        for byte in overflow:
-            self._buffer[self._write_offset] = byte
-            self._write_offset = (self._write_offset + 1) % self._expected_bytes
+
+        n = len(overflow)
+        first = min(n, self._expected_bytes - self._write_offset)
+        self._buffer[self._write_offset:self._write_offset + first] = overflow[:first]
+        remaining = overflow[first:]
+        if remaining:
+            self._buffer[0:len(remaining)] = remaining
+        self._write_offset = (self._write_offset + n) % self._expected_bytes
 
     def _render(self) -> ImageFrame:
         return bytes(self._buffer), self._width, self._height, self._channels

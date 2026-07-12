@@ -52,4 +52,10 @@ class Serializer(ABC):
 
     @abstractmethod
     def load_payload(self, payload: Payload) -> None:
-        pass
+        """Subclasses intentionally do NOT reset `_symbol_index` here: it is
+        reused as-is (mod the new payload's size) so an encoder mid-broadcast
+        keeps advancing rather than snapping back to the start. This is only
+        meaningful for the *encoder clock* use case (EncoderDSP swapping a
+        payload of the same kind while an EncodingStrategy's clock is
+        running); it degrades gracefully but arbitrarily when the new
+        payload has a very different length than the old one."""

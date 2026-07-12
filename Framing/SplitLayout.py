@@ -19,6 +19,10 @@ class SplitLayout:
 
     @staticmethod
     def four_split(internal_clock: int) -> "SplitLayout":
+        if internal_clock % 4 != 0:
+            raise ValueError(
+                f"four_split requires chunk_size divisible by 4, got {internal_clock}"
+            )
         quarter = internal_clock // 4
         envelope = SplitLayout._build_envelope(quarter, internal_clock)
         return SplitLayout(phases=4, pilot_start=0, data_start=2 * quarter, envelope=envelope)

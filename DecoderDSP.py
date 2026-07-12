@@ -1,7 +1,7 @@
 from typing import Callable, List, Optional
 
 from AudioChunk import AudioChunk
-from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
+from Decoder import Decoder, DecodingStrategy
 from DropTolerance import DropAction, DropTolerance, DropToleranceConfig
 from EnergyGate import EnergyGate, EnergyGateConfig
 from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
@@ -13,15 +13,9 @@ from Sink import (
     AudioSink, BinarySink, ImageSink, RawBinarySink, RawImageSink, RawTextSink,
     SinkBehaviour, SinkTee, TextSink,
 )
+from StrategyKinds import DECODING_STRATEGY_CLASSES, scaled_chunk_size
 
-# The 4-split strategy's decode window (chunk_size/4) is half as long as the
-# 2-split strategy's (chunk_size/2), so it needs double the chunk_size to
-# keep the same DFT bin spacing between harmonics and avoid leaking Hann
-# window energy across neighboring harmonics.
-_STRATEGY_CLASSES = {
-    "two": TwoSplitDecodingStrategy,
-    "four": FourSplitDecodingStrategy,
-}
+_STRATEGY_CLASSES = DECODING_STRATEGY_CLASSES
 
 
 class DecoderDSP:
@@ -94,6 +88,49 @@ class DecoderDSP:
     def _decoding_cls(self):
         return _STRATEGY_CLASSES[self._strategy_kind]
 
+    def _build_image_sinks(self):
+        sink = ImageSink(
+            FramingSyncController.from_settings(self.settings),
+            self._sink_behaviour,
+            self._image_codec,
+            self.settings,
+            on_image=self._on_image,
+        )
+        raw_sink = RawImageSink(self._image_codec, self.settings, on_image=self._on_raw_image)
+        return sink, raw_sink
+
+    def _build_binary_sinks(self):
+        sink = BinarySink(
+            FramingSyncController.from_settings(self.settings),
+            self._sink_behaviour,
+            self._binary_codec,
+            on_data=self._on_data,
+        )
+        raw_sink = RawBinarySink(
+            self._binary_codec, max_bytes=self.settings.raw_binary_sink_max_bytes, on_data=self._on_raw_data,
+        )
+        return sink, raw_sink
+
+    def _build_text_sinks(self):
+        sink = TextSink(
+            FramingSyncController.from_settings(self.settings),
+            self._sink_behaviour,
+            self._text_codec,
+            on_text=self._on_text,
+        )
+        raw_sink = RawTextSink(
+            self._text_codec, max_chars=self.settings.raw_text_sink_max_chars,
+            bytes_per_char=self.settings.raw_text_sink_bytes_per_char, on_text=self._on_raw_text,
+        )
+        return sink, raw_sink
+
+    # Per payload-kind: (builder, sink attr name, raw-sink attr name).
+    _FRAMED_SINK_BUILDERS = {
+        "image": ("_build_image_sinks", "_image_sink", "_raw_image_sink"),
+        "binary": ("_build_binary_sinks", "_binary_sink", "_raw_binary_sink"),
+        "text": ("_build_text_sinks", "_text_sink", "_raw_text_sink"),
+    }
+
     def _rebuild_decode_chain(self) -> None:
         self._image_sink = None
         self._raw_image_sink = None
@@ -103,44 +140,12 @@ class DecoderDSP:
         self._text_sink = None
         self._raw_text_sink = None
 
-        if self._payload_kind == "image":
-            sink = ImageSink(
-                FramingSyncController.from_settings(self.settings),
-                self._sink_behaviour,
-                self._image_codec,
-                self.settings,
-                on_image=self._on_image,
-            )
-            self._image_sink = sink
-            raw_sink = RawImageSink(self._image_codec, self.settings, on_image=self._on_raw_image)
-            self._raw_image_sink = raw_sink
-            decode_sink = SinkTee(sink, raw_sink)
-        elif self._payload_kind == "binary":
-            sink = BinarySink(
-                FramingSyncController.from_settings(self.settings),
-                self._sink_behaviour,
-                self._binary_codec,
-                on_data=self._on_data,
-            )
-            self._binary_sink = sink
-            raw_sink = RawBinarySink(
-                self._binary_codec, max_bytes=self.settings.raw_binary_sink_max_bytes, on_data=self._on_raw_data,
-            )
-            self._raw_binary_sink = raw_sink
-            decode_sink = SinkTee(sink, raw_sink)
-        elif self._payload_kind == "text":
-            sink = TextSink(
-                FramingSyncController.from_settings(self.settings),
-                self._sink_behaviour,
-                self._text_codec,
-                on_text=self._on_text,
-            )
-            self._text_sink = sink
-            raw_sink = RawTextSink(
-                self._text_codec, max_chars=self.settings.raw_text_sink_max_chars,
-                bytes_per_char=self.settings.raw_text_sink_bytes_per_char, on_text=self._on_raw_text,
-            )
-            self._raw_text_sink = raw_sink
+        spec = self._FRAMED_SINK_BUILDERS.get(self._payload_kind)
+        if spec is not None:
+            builder_name, sink_attr, raw_sink_attr = spec
+            sink, raw_sink = getattr(self, builder_name)()
+            setattr(self, sink_attr, sink)
+            setattr(self, raw_sink_attr, raw_sink)
             decode_sink = SinkTee(sink, raw_sink)
         else:
             sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, self.settings)
@@ -157,7 +162,7 @@ class DecoderDSP:
         if kind not in _STRATEGY_CLASSES:
             raise ValueError(f"Unknown strategy kind: {kind}")
         self._strategy_kind = kind
-        self.settings.set_chunk_size(self._base_chunk_size * self.settings.strategy_chunk_size_multiplier[kind])
+        self.settings.set_chunk_size(scaled_chunk_size(self.settings, self._base_chunk_size, kind))
         self._dec_strategy = self._decoding_cls()(self.settings)
         f0 = self._manual_f0 if self._f0_mode == "manual" else self._last_f0_q
         if f0 > 0.0:

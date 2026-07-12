@@ -1,24 +1,20 @@
-from typing import Callable, Dict, Optional
+from typing import Dict, Optional
 
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
-from Encoder import Encoder, EncodingStrategy, FourSplitEncodingStrategy, TwoSplitEncodingStrategy
+from Encoder import Encoder, EncodingStrategy
 from Payload import AudioPayload, BinaryPayload, ImagePayload, TextPayload
 from Payload.pixel_codec import make_pixel_codec
 from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextSerializer
 from SerializerMode import SerializerMode
 from Settings import Settings
+from StrategyKinds import ENCODING_STRATEGY_CLASSES, scaled_chunk_size
 
-# The 4-split strategy's decode window (chunk_size/4) is half as long as the
-# 2-split strategy's (chunk_size/2), so it needs double the chunk_size to
-# keep the same DFT bin spacing between harmonics and avoid leaking Hann
-# window energy across neighboring harmonics. See EncodingStrategy classes.
-_STRATEGY_CLASSES = {
-    "two": TwoSplitEncodingStrategy,
-    "four": FourSplitEncodingStrategy,
-}
+_STRATEGY_CLASSES = ENCODING_STRATEGY_CLASSES
 
 _PAYLOAD_KINDS = ("audio", "image", "binary", "text")
+_CODEC_PAYLOAD_KINDS = ("image", "binary", "text")
+_CODEC_PAYLOAD_CLASSES = {"image": ImagePayload, "binary": BinaryPayload, "text": TextPayload}
 
 
 def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
@@ -123,7 +119,7 @@ class EncoderDSP:
         if kind not in _STRATEGY_CLASSES:
             raise ValueError(f"Unknown strategy kind: {kind}")
         self._strategy_kind = kind
-        self.settings.set_chunk_size(self._base_chunk_size * self.settings.strategy_chunk_size_multiplier[kind])
+        self.settings.set_chunk_size(scaled_chunk_size(self.settings, self._base_chunk_size, kind))
         self._wave_generator = _make_harmonic_generator(self.settings)
         self._rebuild_all_strategies()
 
@@ -141,48 +137,32 @@ class EncoderDSP:
     def get_codec_mode(self) -> SerializerMode:
         return self._codec_mode
 
+    def _reload_codec_payload(self, kind: str, mode: SerializerMode):
+        """Rebuild the pixel codec + payload for one of the codec-backed
+        payload kinds (image/binary/text), reloading from its stored path
+        (image always has one; binary/text may not have been given a file
+        yet). Updates `self._<kind>_codec`/`self._<kind>_payload` and
+        returns the new payload."""
+        codec = make_pixel_codec(mode, self.settings)
+        payload = _CODEC_PAYLOAD_CLASSES[kind](self.settings, codec)
+        path = getattr(self, f"_{kind}_path")
+        if path is not None:
+            payload.load_from_file(path)
+        setattr(self, f"_{kind}_codec", codec)
+        setattr(self, f"_{kind}_payload", payload)
+        return payload
+
     def set_codec_mode(self, mode: SerializerMode) -> None:
         self._codec_mode = mode
-
-        self._image_codec = make_pixel_codec(mode, self.settings)
-        image_payload = ImagePayload(self.settings, self._image_codec)
-        image_payload.load_from_file(self._image_path)
-        self._image_payload = image_payload
-        self._strategies["image"].load_payload(image_payload)
-
-        self._binary_codec = make_pixel_codec(mode, self.settings)
-        binary_payload = BinaryPayload(self.settings, self._binary_codec)
-        if self._binary_path is not None:
-            binary_payload.load_from_file(self._binary_path)
-        self._binary_payload = binary_payload
-        self._strategies["binary"].load_payload(binary_payload)
-
-        self._text_codec = make_pixel_codec(mode, self.settings)
-        text_payload = TextPayload(self.settings, self._text_codec)
-        if self._text_path is not None:
-            text_payload.load_from_file(self._text_path)
-        self._text_payload = text_payload
-        self._strategies["text"].load_payload(text_payload)
+        for kind in _CODEC_PAYLOAD_KINDS:
+            payload = self._reload_codec_payload(kind, mode)
+            self._strategies[kind].load_payload(payload)
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         self.settings.set_bits_per_symbol(int(bits_per_symbol))
 
-        self._image_codec = make_pixel_codec(self._codec_mode, self.settings)
-        image_payload = ImagePayload(self.settings, self._image_codec)
-        image_payload.load_from_file(self._image_path)
-        self._image_payload = image_payload
-
-        self._binary_codec = make_pixel_codec(self._codec_mode, self.settings)
-        binary_payload = BinaryPayload(self.settings, self._binary_codec)
-        if self._binary_path is not None:
-            binary_payload.load_from_file(self._binary_path)
-        self._binary_payload = binary_payload
-
-        self._text_codec = make_pixel_codec(self._codec_mode, self.settings)
-        text_payload = TextPayload(self.settings, self._text_codec)
-        if self._text_path is not None:
-            text_payload.load_from_file(self._text_path)
-        self._text_payload = text_payload
+        for kind in _CODEC_PAYLOAD_KINDS:
+            self._reload_codec_payload(kind, self._codec_mode)
 
         self._wave_generator = _make_harmonic_generator(self.settings)
         self._rebuild_all_strategies()
