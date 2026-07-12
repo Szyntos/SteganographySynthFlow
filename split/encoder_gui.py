@@ -18,35 +18,13 @@ except ImportError:
     sd = None
 
 from audio_callback_diag import log_callback_event
-from AdditiveWaveGenerator import AdditiveWaveGenerator
-from Encoder import Encoder, EncodingStrategy, FourSplitEncodingStrategy, TwoSplitEncodingStrategy
+from EncoderDSP import EncoderDSP
 from KeyboardNoteInput import KeyboardNoteInput
 from MidiDeviceInput import MidiDeviceInput, list_midi_input_devices
 from NoteState import NoteState, midi_note_to_hz
-from Payload import AudioPayload, BinaryPayload, ImagePayload, TextPayload
 from PianoKeyboard import PianoKeyboard
-from Payload.pixel_codec import make_pixel_codec
-from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextSerializer
 from SerializerMode import SerializerMode
 from Settings import Settings
-
-
-def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
-    gen = AdditiveWaveGenerator(settings)
-    gen.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
-    gen.set_phases([0.0] * settings.total_harmonics)
-    gen.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
-    return gen
-
-
-# The 4-split strategy's decode window (chunk_size/4) is half as long as the
-# 2-split strategy's (chunk_size/2), so it needs double the chunk_size to
-# keep the same DFT bin spacing between harmonics and avoid leaking Hann
-# window energy across neighboring harmonics on the decoder side.
-_STRATEGY_CLASSES = {
-    "two": TwoSplitEncodingStrategy,
-    "four": FourSplitEncodingStrategy,
-}
 
 
 def list_output_devices() -> List[Tuple[int, str]]:
@@ -60,6 +38,14 @@ def list_output_devices() -> List[Tuple[int, str]]:
 
 
 class EncoderEngine:
+    """Drives an EncoderDSP against a live audio output device stream, with
+    MIDI/keyboard note gating on top.
+
+    All strategy/payload/codec assembly lives in EncoderDSP; this class only
+    owns the sounddevice stream, device selection, note-input gating, and
+    diagnostics.
+    """
+
     def __init__(self, settings: Settings):
         self._settings = settings
         self._volume: float = 1.0
@@ -67,88 +53,13 @@ class EncoderEngine:
         self._lock = threading.Lock()
         self._output_device: Optional[int] = None
 
-        self._payload_kind: str = "audio"
-        self._strategy_kind: str = "two"
-        self._base_chunk_size: int = settings.chunk_size
-        self._codec_mode: SerializerMode = SerializerMode.DIGITAL
-        self._f0: float = settings.pitch_default_hz
-
-        self._audio_payload = AudioPayload()
-        self._audio_payload.load_from_file(settings.modulator_wav_path)
-
-        self._image_path = settings.image_path
-        self._image_codec = make_pixel_codec(self._codec_mode, settings)
-        self._image_payload = ImagePayload(settings, self._image_codec)
-        self._image_payload.load_from_file(self._image_path)
-
-        self._binary_path: Optional[str] = None
-        self._binary_codec = make_pixel_codec(self._codec_mode, settings)
-        self._binary_payload = BinaryPayload(settings, self._binary_codec)
-
-        self._text_path: Optional[str] = None
-        self._text_codec = make_pixel_codec(self._codec_mode, settings)
-        self._text_payload = TextPayload(settings, self._text_codec)
-
-        self._wave_generator = _make_harmonic_generator(settings)
-
-        # One strategy instance per payload kind, built once and reused for
-        # the app's lifetime. Its _clock_position/_current_row track where
-        # we are in the chunk cycle; rebuilding it on every payload/codec
-        # swap snapped that clock back to 0 mid-stream, which desynced the
-        # decoder's window-tuning offset and forced a manual retune.
-        self._strategies = {
-            "audio": self._make_audio_encoding_strategy(),
-            "image": self._make_image_encoding_strategy(),
-            "binary": self._make_binary_encoding_strategy(),
-            "text": self._make_text_encoding_strategy(),
-        }
-        self._encoding_strategy = self._strategies["audio"]
-        self._encoder = Encoder(self._encoding_strategy)
-        self.set_f0(self._f0)
+        self._dsp = EncoderDSP(settings)
+        self._dsp.set_f0(settings.pitch_default_hz)
 
         self._note_state = NoteState()
         self._midi_input = MidiDeviceInput(self._note_state)
         self._midi_enabled: bool = False
         self._keyboard_enabled: bool = False
-
-    def _encoding_cls(self):
-        return _STRATEGY_CLASSES[self._strategy_kind]
-
-    def _make_audio_encoding_strategy(self) -> EncodingStrategy:
-        serializer = AudioSerializer(self._settings, SerializerMode.DIGITAL)
-        strategy = self._encoding_cls()(self._settings, self._wave_generator, serializer)
-        strategy.load_payload(self._audio_payload)
-        return strategy
-
-    def _make_image_encoding_strategy(self) -> EncodingStrategy:
-        serializer = ImageSerializer(self._settings, self._codec_mode)
-        strategy = self._encoding_cls()(self._settings, self._wave_generator, serializer)
-        strategy.load_payload(self._image_payload)
-        return strategy
-
-    def _make_binary_encoding_strategy(self) -> EncodingStrategy:
-        serializer = BinarySerializer(self._settings, self._codec_mode)
-        strategy = self._encoding_cls()(self._settings, self._wave_generator, serializer)
-        strategy.load_payload(self._binary_payload)
-        return strategy
-
-    def _make_text_encoding_strategy(self) -> EncodingStrategy:
-        serializer = TextSerializer(self._settings, self._codec_mode)
-        strategy = self._encoding_cls()(self._settings, self._wave_generator, serializer)
-        strategy.load_payload(self._text_payload)
-        return strategy
-
-    def _rebuild_strategy_for(self, kind: str) -> None:
-        """Structural reset (harmonics/clock geometry changed): rebuild just
-        that kind's strategy in place, preserving the others' clocks."""
-        if kind == "audio":
-            self._strategies["audio"] = self._make_audio_encoding_strategy()
-        elif kind == "image":
-            self._strategies["image"] = self._make_image_encoding_strategy()
-        elif kind == "binary":
-            self._strategies["binary"] = self._make_binary_encoding_strategy()
-        else:
-            self._strategies["text"] = self._make_text_encoding_strategy()
 
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:
@@ -161,91 +72,38 @@ class EncoderEngine:
         return self._stream is not None
 
     def set_strategy_kind(self, kind: str) -> None:
-        if kind not in _STRATEGY_CLASSES:
-            raise ValueError(f"Unknown strategy kind: {kind}")
         with self._lock:
-            self._strategy_kind = kind
-            self._settings.set_chunk_size(self._base_chunk_size * self._settings.strategy_chunk_size_multiplier[kind])
-            self._wave_generator = _make_harmonic_generator(self._settings)
-            for payload_kind in ("audio", "image", "binary", "text"):
-                self._rebuild_strategy_for(payload_kind)
-            self._encoding_strategy = self._strategies[self._payload_kind]
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
+            self._dsp.set_strategy_kind(kind)
 
     def set_payload_kind(self, kind: str) -> None:
-        if kind not in ("audio", "image", "binary", "text"):
-            raise ValueError(f"Unknown payload kind: {kind}")
         with self._lock:
-            self._payload_kind = kind
-            self._encoding_strategy = self._strategies[kind]
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
+            self._dsp.set_payload_kind(kind)
 
     def set_codec_mode(self, mode: SerializerMode) -> None:
         with self._lock:
-            self._codec_mode = mode
-
-            self._image_codec = make_pixel_codec(mode, self._settings)
-            image_payload = ImagePayload(self._settings, self._image_codec)
-            image_payload.load_from_file(self._image_path)
-            self._image_payload = image_payload
-            self._strategies["image"].load_payload(image_payload)
-
-            self._binary_codec = make_pixel_codec(mode, self._settings)
-            binary_payload = BinaryPayload(self._settings, self._binary_codec)
-            if self._binary_path is not None:
-                binary_payload.load_from_file(self._binary_path)
-            self._binary_payload = binary_payload
-            self._strategies["binary"].load_payload(binary_payload)
-
-            self._text_codec = make_pixel_codec(mode, self._settings)
-            text_payload = TextPayload(self._settings, self._text_codec)
-            if self._text_path is not None:
-                text_payload.load_from_file(self._text_path)
-            self._text_payload = text_payload
-            self._strategies["text"].load_payload(text_payload)
+            self._dsp.set_codec_mode(mode)
 
     def load_payload_file(self, file_path: str) -> None:
         with self._lock:
-            if self._payload_kind == "image":
-                self._image_path = file_path
-                payload = ImagePayload(self._settings, self._image_codec)
-                payload.load_from_file(file_path)
-                self._image_payload = payload
-            elif self._payload_kind == "binary":
-                self._binary_path = file_path
-                payload = BinaryPayload(self._settings, self._binary_codec)
-                payload.load_from_file(file_path)
-                self._binary_payload = payload
-            elif self._payload_kind == "text":
-                self._text_path = file_path
-                payload = TextPayload(self._settings, self._text_codec)
-                payload.load_from_file(file_path)
-                self._text_payload = payload
-            else:
-                payload = AudioPayload()
-                payload.load_from_file(file_path)
-                self._audio_payload = payload
-            # Re-loading into the existing strategy keeps its _clock_position
-            # and the wave generator's phases running, so the decoder stays
-            # in sync without needing a retune.
-            self._encoding_strategy.load_payload(payload)
+            self._dsp.load_payload_file(file_path)
+
+    def get_payload_path(self, kind: Optional[str] = None) -> Optional[str]:
+        with self._lock:
+            return self._dsp.get_payload_path(kind)
 
     def get_position_fraction(self) -> float:
         with self._lock:
-            return self._encoding_strategy.get_position_fraction()
+            return self._dsp.get_position_fraction()
 
     def set_position_fraction(self, fraction: float) -> None:
         with self._lock:
-            self._encoding_strategy.set_position_fraction(fraction)
+            self._dsp.set_position_fraction(fraction)
 
     def set_f0(self, f0: float) -> None:
-        self._f0 = float(f0)
-        self._encoder.set_f0(f0)
+        self._dsp.set_f0(f0)
 
     def get_f0(self) -> float:
-        return self._f0
+        return self._dsp.get_f0()
 
     def list_midi_devices(self) -> List[str]:
         return list_midi_input_devices()
@@ -273,31 +131,7 @@ class EncoderEngine:
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         with self._lock:
-            self._settings.set_bits_per_symbol(int(bits_per_symbol))
-
-            self._image_codec = make_pixel_codec(self._codec_mode, self._settings)
-            image_payload = ImagePayload(self._settings, self._image_codec)
-            image_payload.load_from_file(self._image_path)
-            self._image_payload = image_payload
-
-            self._binary_codec = make_pixel_codec(self._codec_mode, self._settings)
-            binary_payload = BinaryPayload(self._settings, self._binary_codec)
-            if self._binary_path is not None:
-                binary_payload.load_from_file(self._binary_path)
-            self._binary_payload = binary_payload
-
-            self._text_codec = make_pixel_codec(self._codec_mode, self._settings)
-            text_payload = TextPayload(self._settings, self._text_codec)
-            if self._text_path is not None:
-                text_payload.load_from_file(self._text_path)
-            self._text_payload = text_payload
-
-            self._wave_generator = _make_harmonic_generator(self._settings)
-            for kind in ("audio", "image", "binary", "text"):
-                self._rebuild_strategy_for(kind)
-            self._encoding_strategy = self._strategies[self._payload_kind]
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
+            self._dsp.set_bits_per_symbol(bits_per_symbol)
 
     def _callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
         _cb_start = time.perf_counter()
@@ -318,9 +152,9 @@ class EncoderEngine:
                     midi_note = self._note_state.current_note_or(-1)
                     note_held = midi_note >= 0
                     if note_held:
-                        self.set_f0(midi_note_to_hz(midi_note))
+                        self._dsp.set_f0(midi_note_to_hz(midi_note))
 
-                enc_chunk = self._encoder.process(frames)
+                enc_chunk = self._dsp.process(frames)
                 arr = np.array(enc_chunk.get_samples(), dtype=np.float32) * self._volume
                 if gate_active and not note_held:
                     arr[:] = 0.0
@@ -663,14 +497,7 @@ class EncoderApp(tk.Tk):
     def _on_kind_change(self) -> None:
         kind = self._kind_var.get()
         self._engine.set_payload_kind(kind)
-        if kind == "image":
-            default_name = os.path.basename(self._engine._image_path)
-        elif kind == "binary":
-            default_name = os.path.basename(self._engine._binary_path or "")
-        elif kind == "text":
-            default_name = os.path.basename(self._engine._text_path or "")
-        else:
-            default_name = os.path.basename(self._engine._settings.modulator_wav_path)
+        default_name = os.path.basename(self._engine.get_payload_path(kind) or "")
         self._payload_var.set(default_name)
         self._update_kind_dependent_visibility()
 

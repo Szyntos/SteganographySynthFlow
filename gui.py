@@ -12,44 +12,22 @@ try:
 except ImportError:
     sd = None
 
-from AdditiveWaveGenerator import AdditiveWaveGenerator
-from AudioChunk import AudioChunk
-from Decoder import Decoder, DecodingStrategy, FourSplitDecodingStrategy, TwoSplitDecodingStrategy
-from DropTolerance import DropAction, DropTolerance, DropToleranceConfig
-from Encoder import Encoder, EncodingStrategy, FourSplitEncodingStrategy, TwoSplitEncodingStrategy
-from EnergyGate import EnergyGate, EnergyGateConfig
-from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
-from Framing import FramingSyncController
-from Payload import AudioPayload, BinaryPayload, ImagePayload, TextPayload
-from Payload.pixel_codec import make_pixel_codec
-from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextSerializer
+from DecoderDSP import DecoderDSP
+from EncoderDSP import EncoderDSP
 from SerializerMode import SerializerMode
 from Settings import Settings
-from Sink import (
-    AudioSink, BinarySink, ImageSink, RawBinarySink, RawImageSink, RawTextSink,
-    SinkBehaviour, SinkTee, TextSink,
-)
-
-
-def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
-    gen = AdditiveWaveGenerator(settings)
-    gen.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
-    gen.set_phases([0.0] * settings.total_harmonics)
-    gen.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
-    return gen
-
-
-# The 4-split strategy's decode window (chunk_size/4) is half as long as the
-# 2-split strategy's (chunk_size/2), so it needs double the chunk_size to
-# keep the same DFT bin spacing between harmonics and avoid leaking Hann
-# window energy across neighboring harmonics. See EncodingStrategy classes.
-_STRATEGY_CLASSES = {
-    "two": (TwoSplitEncodingStrategy, TwoSplitDecodingStrategy),
-    "four": (FourSplitEncodingStrategy, FourSplitDecodingStrategy),
-}
+from Sink import SinkBehaviour
 
 
 class AudioEngine:
+    """Drives the encoder/decoder DSP pipelines against a live audio device.
+
+    Assembly of strategies, payloads, codecs and sinks lives in EncoderDSP/
+    DecoderDSP; this class only owns the sounddevice stream, the output
+    routing (encoder vs. decoder), and keeps both DSP objects' shared knobs
+    (strategy kind, payload kind, codec mode, bits/symbol, f0) in sync.
+    """
+
     def __init__(self, settings: Settings):
         self._settings = settings
         self._volume: float = 1.0
@@ -57,215 +35,33 @@ class AudioEngine:
         self._stream = None
         self._lock = threading.Lock()
 
-        self._payload_kind: str = "audio"
-        self._strategy_kind: str = "two"
-        self._base_chunk_size: int = settings.chunk_size
-        self._codec_mode: SerializerMode = SerializerMode.DIGITAL
-        self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
-        self._on_image: Optional[Callable] = None
-        self._image_sink: Optional[ImageSink] = None
-        self._on_raw_image: Optional[Callable] = None
-        self._raw_image_sink: Optional[RawImageSink] = None
-        self._audio_sink: Optional[AudioSink] = None
-        self._on_data: Optional[Callable] = None
-        self._binary_sink: Optional[BinarySink] = None
-        self._on_raw_data: Optional[Callable] = None
-        self._raw_binary_sink: Optional[RawBinarySink] = None
-        self._on_text: Optional[Callable] = None
-        self._text_sink: Optional[TextSink] = None
-        self._on_raw_text: Optional[Callable] = None
-        self._raw_text_sink: Optional[RawTextSink] = None
-        self._f0: float = 0.0
-
-        self._audio_payload = AudioPayload()
-        self._audio_payload.load_from_file(settings.modulator_wav_path)
-
-        self._image_path = settings.image_path
-        self._image_codec = make_pixel_codec(self._codec_mode, settings)
-        self._image_payload = ImagePayload(settings, self._image_codec)
-        self._image_payload.load_from_file(self._image_path)
-
-        self._binary_path: Optional[str] = None
-        self._binary_codec = make_pixel_codec(self._codec_mode, settings)
-        self._binary_payload = BinaryPayload(settings, self._binary_codec)
-
-        self._text_path: Optional[str] = None
-        self._text_codec = make_pixel_codec(self._codec_mode, settings)
-        self._text_payload = TextPayload(settings, self._text_codec)
-
-        self._dec_strategy = self._decoding_cls()(settings)
-
-        self._encoding_strategy = self._build_audio_encoding_strategy()
-        self._encoder = Encoder(self._encoding_strategy)
-
-        self._decoder: Optional[Decoder] = None
-        self._rebuild_decode_chain()
-
-        self._f0_mode: str = "manual"  # "manual", "autocorr", "fft"
-        self._pitch_quantize: bool = False
-        self._autocorr_estimator = AutocorrF0Estimator(
-            f_min_hz=settings.autocorr_f0_min_hz, f_max_hz=settings.autocorr_f0_max_hz,
-            rms_floor=settings.autocorr_rms_floor, corr_threshold=settings.autocorr_corr_threshold,
-        )
-        self._fft_estimator = FFTF0Estimator(
-            n_fft=settings.fft_f0_n_fft, f_min_hz=settings.fft_f0_min_hz,
-            f_max_hz=settings.fft_f0_max_hz, rms_floor=settings.fft_rms_floor,
-        )
-        self._last_f0_q: float = 0.0
-        self._last_confidence: float = 0.0
-        self._energy_gate = EnergyGate(EnergyGateConfig(
-            ema_alpha=settings.energy_gate_ema_alpha, abs_floor=settings.energy_gate_abs_floor,
-            drop_ratio=settings.energy_gate_drop_ratio,
-        ))
-        self._drop_tolerance = DropTolerance(DropToleranceConfig(
-            tolerance_chunks=settings.drop_tolerance_chunks,
-        ))
-        self._is_gated: bool = False
+        self._enc = EncoderDSP(settings)
+        self._dec = DecoderDSP(settings)
         self.set_f0(settings.pitch_default_hz)
 
     def set_f0_estimator_mode(self, mode: str) -> None:
-        if mode not in ("manual", "autocorr", "fft"):
-            raise ValueError(f"Unknown f0 estimator mode: {mode}")
         with self._lock:
-            self._f0_mode = mode
-            self._last_f0_q = 0.0
-            if mode == "manual":
-                self._dec_strategy.set_f0(self._f0)
+            self._dec.set_f0_estimator_mode(mode)
 
     def set_pitch_quantize(self, enabled: bool) -> None:
-        self._pitch_quantize = bool(enabled)
+        self._dec.set_pitch_quantize(enabled)
 
     def get_estimated_f0(self) -> float:
-        return self._last_f0_q
+        return self._dec.get_estimated_f0()
 
     def get_confidence(self) -> float:
-        return self._last_confidence
+        return self._dec.get_confidence()
 
     def get_drop_run(self) -> int:
-        return self._drop_tolerance.drop_run
-
-    def _handle_missing(self, n_samples: int) -> list:
-        action = self._drop_tolerance.push(True)
-        if action == DropAction.RESET_NOW:
-            self._dec_strategy.reconfigure()
-            self._autocorr_estimator.reset()
-            self._fft_estimator.reset()
-            self._last_f0_q = 0.0
-        return [0.0] * n_samples
+        return self._dec.get_drop_run()
 
     def is_gated(self) -> bool:
-        return self._is_gated
-
-    # ── strategy selection ───────────────────────────────────────────────────
-    def _encoding_cls(self):
-        return _STRATEGY_CLASSES[self._strategy_kind][0]
-
-    def _decoding_cls(self):
-        return _STRATEGY_CLASSES[self._strategy_kind][1]
+        return self._dec.is_gated()
 
     def set_strategy_kind(self, kind: str) -> None:
-        if kind not in _STRATEGY_CLASSES:
-            raise ValueError(f"Unknown strategy kind: {kind}")
         with self._lock:
-            self._strategy_kind = kind
-            self._settings.set_chunk_size(self._base_chunk_size * self._settings.strategy_chunk_size_multiplier[kind])
-
-            self._dec_strategy = self._decoding_cls()(self._settings)
-            self._dec_strategy.set_f0(self._f0)
-
-            self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
-
-            self._rebuild_decode_chain()
-
-    # ── encoding strategy construction ───────────────────────────────────────
-    def _build_audio_encoding_strategy(self) -> EncodingStrategy:
-        serializer = AudioSerializer(self._settings, SerializerMode.DIGITAL)
-        strategy = self._encoding_cls()(
-            self._settings, _make_harmonic_generator(self._settings), serializer
-        )
-        strategy.load_payload(self._audio_payload)
-        return strategy
-
-    def _build_image_encoding_strategy(self) -> EncodingStrategy:
-        serializer = ImageSerializer(self._settings, self._codec_mode)
-        strategy = self._encoding_cls()(
-            self._settings, _make_harmonic_generator(self._settings), serializer
-        )
-        strategy.load_payload(self._image_payload)
-        return strategy
-
-    def _build_binary_encoding_strategy(self) -> EncodingStrategy:
-        serializer = BinarySerializer(self._settings, self._codec_mode)
-        strategy = self._encoding_cls()(
-            self._settings, _make_harmonic_generator(self._settings), serializer
-        )
-        strategy.load_payload(self._binary_payload)
-        return strategy
-
-    def _build_text_encoding_strategy(self) -> EncodingStrategy:
-        serializer = TextSerializer(self._settings, self._codec_mode)
-        strategy = self._encoding_cls()(
-            self._settings, _make_harmonic_generator(self._settings), serializer
-        )
-        strategy.load_payload(self._text_payload)
-        return strategy
-
-    def _rebuild_decode_chain(self) -> None:
-        self._image_sink = None
-        self._raw_image_sink = None
-        self._audio_sink = None
-        self._binary_sink = None
-        self._raw_binary_sink = None
-        self._text_sink = None
-        self._raw_text_sink = None
-
-        if self._payload_kind == "image":
-            sink = ImageSink(
-                FramingSyncController.from_settings(self._settings),
-                self._sink_behaviour,
-                self._image_codec,
-                self._settings,
-                on_image=self._on_image,
-            )
-            self._image_sink = sink
-            raw_sink = RawImageSink(self._image_codec, self._settings, on_image=self._on_raw_image)
-            self._raw_image_sink = raw_sink
-            decode_sink = SinkTee(sink, raw_sink)
-        elif self._payload_kind == "binary":
-            sink = BinarySink(
-                FramingSyncController.from_settings(self._settings),
-                self._sink_behaviour,
-                self._binary_codec,
-                on_data=self._on_data,
-            )
-            self._binary_sink = sink
-            raw_sink = RawBinarySink(
-                self._binary_codec, max_bytes=self._settings.raw_binary_sink_max_bytes, on_data=self._on_raw_data,
-            )
-            self._raw_binary_sink = raw_sink
-            decode_sink = SinkTee(sink, raw_sink)
-        elif self._payload_kind == "text":
-            sink = TextSink(
-                FramingSyncController.from_settings(self._settings),
-                self._sink_behaviour,
-                self._text_codec,
-                on_text=self._on_text,
-            )
-            self._text_sink = sink
-            raw_sink = RawTextSink(
-                self._text_codec, max_chars=self._settings.raw_text_sink_max_chars,
-                bytes_per_char=self._settings.raw_text_sink_bytes_per_char, on_text=self._on_raw_text,
-            )
-            self._raw_text_sink = raw_sink
-            decode_sink = SinkTee(sink, raw_sink)
-        else:
-            sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, self._settings)
-            self._audio_sink = sink
-            decode_sink = sink
-
-        self._decoder = Decoder(self._settings, self._dec_strategy, decode_sink)
+            self._enc.set_strategy_kind(kind)
+            self._dec.set_strategy_kind(kind)
 
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:
@@ -275,229 +71,97 @@ class AudioEngine:
         self._source = source
 
     def get_payload_kind(self) -> str:
-        return self._payload_kind
+        return self._enc.get_payload_kind()
 
     def set_payload_kind(self, kind: str) -> None:
-        if kind not in ("audio", "image", "binary", "text"):
-            raise ValueError(f"Unknown payload kind: {kind}")
         with self._lock:
-            self._payload_kind = kind
-            self._encoding_strategy = self._build_encoding_strategy_for(kind)
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
-            self._dec_strategy.reconfigure()
-            self._rebuild_decode_chain()
-
-    def _build_encoding_strategy_for(self, kind: str) -> EncodingStrategy:
-        if kind == "audio":
-            return self._build_audio_encoding_strategy()
-        if kind == "image":
-            return self._build_image_encoding_strategy()
-        if kind == "binary":
-            return self._build_binary_encoding_strategy()
-        return self._build_text_encoding_strategy()
+            self._enc.set_payload_kind(kind)
+            self._dec.set_payload_kind(kind)
 
     def set_codec_mode(self, mode: SerializerMode) -> None:
         with self._lock:
-            self._codec_mode = mode
-
-            self._image_codec = make_pixel_codec(mode, self._settings)
-            image_payload = ImagePayload(self._settings, self._image_codec)
-            image_payload.load_from_file(self._image_path)
-            self._image_payload = image_payload
-
-            self._binary_codec = make_pixel_codec(mode, self._settings)
-            binary_payload = BinaryPayload(self._settings, self._binary_codec)
-            if self._binary_path is not None:
-                binary_payload.load_from_file(self._binary_path)
-            self._binary_payload = binary_payload
-
-            self._text_codec = make_pixel_codec(mode, self._settings)
-            text_payload = TextPayload(self._settings, self._text_codec)
-            if self._text_path is not None:
-                text_payload.load_from_file(self._text_path)
-            self._text_payload = text_payload
-
-            if self._payload_kind != "audio":
-                self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)
-                self._encoding_strategy.set_f0(self._f0)
-                self._encoder.set_encoding_strategy(self._encoding_strategy)
-                self._dec_strategy.reconfigure()
-                self._rebuild_decode_chain()
+            self._enc.set_codec_mode(mode)
+            self._dec.set_codec_mode(mode)
 
     def set_sink_behaviour(self, behaviour: SinkBehaviour) -> None:
         with self._lock:
-            self._sink_behaviour = behaviour
-            if self._payload_kind != "audio":
-                self._rebuild_decode_chain()
+            self._dec.set_sink_behaviour(behaviour)
 
     def set_on_image(self, callback: Optional[Callable]) -> None:
         with self._lock:
-            self._on_image = callback
-            if self._image_sink is not None:
-                self._image_sink.set_on_image(callback)
+            self._dec.set_on_image(callback)
 
     def set_on_raw_image(self, callback: Optional[Callable]) -> None:
         with self._lock:
-            self._on_raw_image = callback
-            if self._raw_image_sink is not None:
-                self._raw_image_sink.set_on_image(callback)
+            self._dec.set_on_raw_image(callback)
 
     def set_on_data(self, callback: Optional[Callable]) -> None:
         with self._lock:
-            self._on_data = callback
-            if self._binary_sink is not None:
-                self._binary_sink.set_on_data(callback)
+            self._dec.set_on_data(callback)
 
     def set_on_raw_data(self, callback: Optional[Callable]) -> None:
         with self._lock:
-            self._on_raw_data = callback
-            if self._raw_binary_sink is not None:
-                self._raw_binary_sink.set_on_data(callback)
+            self._dec.set_on_raw_data(callback)
 
     def set_on_text(self, callback: Optional[Callable]) -> None:
         with self._lock:
-            self._on_text = callback
-            if self._text_sink is not None:
-                self._text_sink.set_on_text(callback)
+            self._dec.set_on_text(callback)
 
     def set_on_raw_text(self, callback: Optional[Callable]) -> None:
         with self._lock:
-            self._on_raw_text = callback
-            if self._raw_text_sink is not None:
-                self._raw_text_sink.set_on_text(callback)
+            self._dec.set_on_raw_text(callback)
 
     def get_latest_image(self):
         with self._lock:
-            return self._image_sink.get_latest_image() if self._image_sink is not None else None
+            return self._dec.get_latest_image()
 
     def get_latest_bytes(self) -> Optional[bytes]:
         with self._lock:
-            return self._binary_sink.get_bytes() if self._binary_sink is not None else None
+            return self._dec.get_latest_bytes()
 
     def get_latest_text(self) -> Optional[str]:
         with self._lock:
-            return self._text_sink.get_text() if self._text_sink is not None else None
+            return self._dec.get_latest_text()
 
     def dump_decoded_audio_to_wav(self, file_path: str) -> None:
         with self._lock:
-            if self._audio_sink is None:
-                raise RuntimeError("No decoded audio available (switch payload type to Audio).")
-            self._audio_sink.dump_to_wav(file_path)
+            self._dec.dump_decoded_audio_to_wav(file_path)
 
     def dump_decoded_bytes_to_file(self, file_path: str) -> None:
         with self._lock:
-            if self._binary_sink is None or self._binary_sink.get_bytes() is None:
-                raise RuntimeError("No decoded binary data available yet.")
-            with open(file_path, "wb") as f:
-                f.write(self._binary_sink.get_bytes())
+            self._dec.dump_decoded_bytes_to_file(file_path)
 
     def load_payload_file(self, file_path: str) -> None:
         with self._lock:
-            if self._payload_kind == "image":
-                self._image_path = file_path
-                payload = ImagePayload(self._settings, self._image_codec)
-                payload.load_from_file(file_path)
-                self._image_payload = payload
-                self._encoding_strategy = self._build_image_encoding_strategy()
-            elif self._payload_kind == "binary":
-                self._binary_path = file_path
-                payload = BinaryPayload(self._settings, self._binary_codec)
-                payload.load_from_file(file_path)
-                self._binary_payload = payload
-                self._encoding_strategy = self._build_binary_encoding_strategy()
-            elif self._payload_kind == "text":
-                self._text_path = file_path
-                payload = TextPayload(self._settings, self._text_codec)
-                payload.load_from_file(file_path)
-                self._text_payload = payload
-                self._encoding_strategy = self._build_text_encoding_strategy()
-            else:
-                payload = AudioPayload()
-                payload.load_from_file(file_path)
-                self._audio_payload = payload
-                self._encoding_strategy = self._build_audio_encoding_strategy()
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
-            self._dec_strategy.reconfigure()
+            self._enc.load_payload_file(file_path)
+
+    def get_payload_path(self, kind: Optional[str] = None) -> Optional[str]:
+        with self._lock:
+            return self._enc.get_payload_path(kind)
 
     def get_position_fraction(self) -> float:
         with self._lock:
-            return self._encoding_strategy.get_position_fraction()
+            return self._enc.get_position_fraction()
 
     def set_position_fraction(self, fraction: float) -> None:
         with self._lock:
-            self._encoding_strategy.set_position_fraction(fraction)
+            self._enc.set_position_fraction(fraction)
 
     def set_f0(self, f0: float) -> None:
-        self._f0 = float(f0)
-        self._encoder.set_f0(f0)
-        self._dec_strategy.set_f0(f0)
+        self._enc.set_f0(f0)
+        self._dec.set_f0(f0)
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         with self._lock:
-            self._settings.set_bits_per_symbol(int(bits_per_symbol))
-
-            self._image_codec = make_pixel_codec(self._codec_mode, self._settings)
-            image_payload = ImagePayload(self._settings, self._image_codec)
-            image_payload.load_from_file(self._image_path)
-            self._image_payload = image_payload
-
-            self._binary_codec = make_pixel_codec(self._codec_mode, self._settings)
-            binary_payload = BinaryPayload(self._settings, self._binary_codec)
-            if self._binary_path is not None:
-                binary_payload.load_from_file(self._binary_path)
-            self._binary_payload = binary_payload
-
-            self._text_codec = make_pixel_codec(self._codec_mode, self._settings)
-            text_payload = TextPayload(self._settings, self._text_codec)
-            if self._text_path is not None:
-                text_payload.load_from_file(self._text_path)
-            self._text_payload = text_payload
-
-            self._encoding_strategy = self._build_encoding_strategy_for(self._payload_kind)
-            self._encoding_strategy.set_f0(self._f0)
-            self._encoder.set_encoding_strategy(self._encoding_strategy)
-            self._dec_strategy.reconfigure()
-            self._rebuild_decode_chain()
+            self._enc.set_bits_per_symbol(bits_per_symbol)
+            self._dec.set_bits_per_symbol(bits_per_symbol)
 
     def _callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
         with self._lock:
-            enc_chunk = self._encoder.process(frames)
+            enc_chunk = self._enc.process(frames)
             enc_samples = enc_chunk.get_samples()
-            enc_arr = np.asarray(enc_samples, dtype=np.float32)
 
-            rms_now = EnergyGate.rms(enc_arr)
-            self._is_gated = self._energy_gate.is_drop(rms_now)
-
-            if self._is_gated:
-                dec_samples = self._handle_missing(len(enc_samples))
-            else:
-                if self._f0_mode == "manual":
-                    f_hat = self._f0
-                    self._last_confidence = 1.0
-                else:
-                    estimator = (
-                        self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
-                    )
-                    f_hat = estimator.estimate(enc_arr, float(self._settings.fs_out))
-                    self._last_confidence = estimator.confidence
-
-                if self._pitch_quantize and f_hat > 0.0:
-                    f_hat = quantize_to_chromatic_hz(f_hat, self._settings.pitch_quantizer_a4_hz)
-
-                if f_hat > 0.0:
-                    self._last_f0_q = f_hat
-                elif self._last_f0_q > 0.0:
-                    f_hat = self._last_f0_q
-
-                if f_hat <= 0.0:
-                    dec_samples = self._handle_missing(len(enc_samples))
-                else:
-                    self._drop_tolerance.push(False)
-                    self._dec_strategy.set_f0(f_hat)
-                    dec_chunk = self._decoder.process(AudioChunk(enc_samples), frames)
-                    dec_samples = dec_chunk.get_samples()
+            dec_samples = self._dec.process_chunk(enc_samples, frames)
 
             samples = enc_samples if self._source == "encoder" else dec_samples
             arr = np.array(samples, dtype=np.float32) * self._volume
@@ -506,9 +170,7 @@ class AudioEngine:
     def start(self) -> None:
         if sd is None:
             raise RuntimeError("sounddevice is not installed.\nRun: pip install sounddevice")
-        self._energy_gate.reset()
-        self._drop_tolerance.reset()
-        self._is_gated = False
+        self._dec.reset()
         block_size = self._settings.audio_driver_polling_rate
         self._stream = sd.OutputStream(
             samplerate=self._settings.fs_out,
@@ -896,14 +558,7 @@ class App(tk.Tk):
     def _on_kind_change(self) -> None:
         kind = self._kind_var.get()
         self._engine.set_payload_kind(kind)
-        if kind == "image":
-            default_name = os.path.basename(self._engine._image_path)
-        elif kind == "binary":
-            default_name = os.path.basename(self._engine._binary_path or "")
-        elif kind == "text":
-            default_name = os.path.basename(self._engine._text_path or "")
-        else:
-            default_name = os.path.basename(self._engine._settings.modulator_wav_path)
+        default_name = os.path.basename(self._engine.get_payload_path(kind) or "")
         self._payload_var.set(default_name)
         self._pending_image_frame = None
         self._preview_photo = None
