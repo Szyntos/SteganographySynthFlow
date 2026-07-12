@@ -19,6 +19,7 @@ logs/
 exp/output/
 diff_*.csv
 .pytest_cache/
+results/
 
 # C extensions
 *.so
