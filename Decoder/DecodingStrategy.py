@@ -22,7 +22,7 @@ class DecodingStrategy(ABC):
         self._m_state: np.ndarray = np.zeros(0)
         self._alpha: float = settings.decoder_strategy_alpha
         self._mag_threshold: float = 1e-6
-        self._analysis_cache_f0: float | None = None
+        self._analysis_cache_key: tuple | None = None
         self._analysis_cache: tuple | None = None
         self.reconfigure()
         self._f0: float = 440.0
@@ -32,7 +32,7 @@ class DecodingStrategy(ABC):
         self._internal_clock = self._settings.chunk_size
         self._audio_chunk_input_fifo = SamplesFifo()
         self._m_state = np.zeros(self._num_rows)
-        self._analysis_cache_f0 = None
+        self._analysis_cache_key = None
         self._analysis_cache = None
 
     def set_f0(self, f0: float):
@@ -55,10 +55,17 @@ class DecodingStrategy(ABC):
         return decoded_symbols
 
     def _get_analysis_arrays(self, fs: float, window_size: int):
-        if self._analysis_cache_f0 == self._f0 and self._analysis_cache is not None:
+        # The projection matrices depend on every term below, not just f0: a
+        # key that omits the window geometry silently returns matrices built
+        # for the previous chunk_size/layout.
+        total_harmonics = self._settings.total_harmonics
+        key = (
+            self._f0, fs, window_size, total_harmonics,
+            self._layout.pilot_start, self._layout.data_start,
+        )
+        if self._analysis_cache_key == key and self._analysis_cache is not None:
             return self._analysis_cache
 
-        total_harmonics = self._settings.total_harmonics
         nyquist = 0.5 * fs
 
         # Use the largest integer-cycle window length that fits in window_size.
@@ -92,7 +99,7 @@ class DecodingStrategy(ABC):
         proj_p = np.exp(-1j * phase_p)
         proj_d = np.exp(-1j * phase_d)
 
-        self._analysis_cache_f0 = self._f0
+        self._analysis_cache_key = key
         self._analysis_cache = (analysis_len, win_start, hann_win, valid_mask, proj_p, proj_d)
         return self._analysis_cache
 

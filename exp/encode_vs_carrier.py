@@ -37,17 +37,9 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 F0 = 400.0
 
 
-def harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
-    gen = AdditiveWaveGenerator(settings)
-    gen.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
-    gen.set_phases([0.0] * settings.total_harmonics)
-    gen.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
-    return gen
-
-
 def build_encoder(settings: Settings, payload: AudioPayload) -> tuple[Encoder, AudioSerializer]:
     serializer = AudioSerializer(settings, SerializerMode.DIGITAL)
-    strategy = TwoSplitEncodingStrategy(settings, harmonic_generator(settings), serializer)
+    strategy = TwoSplitEncodingStrategy(settings, AdditiveWaveGenerator.harmonic(settings), serializer)
     strategy.load_payload(payload)
     encoder = Encoder(strategy)
     encoder.set_f0(F0)

@@ -222,6 +222,10 @@ class DecoderApp(tk.Tk):
         self._pending_raw_frame = None
         self._pending_decoded_text: Optional[str] = None
         self._pending_raw_decoded_text: Optional[str] = None
+        # Guards against the estimated-f0 poll writing the slider, which
+        # triggers _on_pitch_change and would feed the estimate back into the
+        # engine (and clobber the user's manual pitch).
+        self._syncing_pitch_ui = False
         self._input_devices = list_devices("input")
         self._output_devices = list_devices("output")
 
@@ -675,11 +679,13 @@ class DecoderApp(tk.Tk):
     def _poll_image(self) -> None:
         frame = self._pending_image_frame
         if frame is not None:
+            self._pending_image_frame = None
             photo = self._render_frame(frame, self._preview_label)
             if photo is not None:
                 self._preview_photo = photo
         raw_frame = self._pending_raw_frame
         if raw_frame is not None:
+            self._pending_raw_frame = None
             photo = self._render_frame(raw_frame, self._raw_preview_label)
             if photo is not None:
                 self._raw_preview_photo = photo
@@ -710,6 +716,8 @@ class DecoderApp(tk.Tk):
         self._vol_label.configure(text=label)
 
     def _on_pitch_change(self, value: str) -> None:
+        if self._syncing_pitch_ui:
+            return
         f0 = float(value)
         self._settings.pitch_default_hz = f0
         self._engine.set_f0(f0)
@@ -739,7 +747,11 @@ class DecoderApp(tk.Tk):
         if not is_manual:
             f0 = self._engine.get_estimated_f0()
             if f0 > 0.0:
-                self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
+                self._syncing_pitch_ui = True
+                try:
+                    self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
+                finally:
+                    self._syncing_pitch_ui = False
                 self._pitch_label.configure(text=f"{f0:.2f} Hz")
 
         drop_run = self._engine.get_drop_run()

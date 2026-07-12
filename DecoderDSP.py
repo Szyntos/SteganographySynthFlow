@@ -13,7 +13,7 @@ from Sink import (
     AudioSink, BinarySink, ImageSink, RawBinarySink, RawImageSink, RawTextSink,
     SinkBehaviour, SinkTee, TextSink,
 )
-from StrategyKinds import DECODING_STRATEGY_CLASSES, scaled_chunk_size
+from StrategyKinds import DECODING_STRATEGY_CLASSES, apply_strategy_kind
 
 _STRATEGY_CLASSES = DECODING_STRATEGY_CLASSES
 
@@ -29,10 +29,10 @@ class DecoderDSP:
 
         self._payload_kind: str = "audio"
         self._strategy_kind: str = "two"
-        self._base_chunk_size: int = self.settings.chunk_size
         self._codec_mode: SerializerMode = SerializerMode.DIGITAL
         self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
         self._resample_method: str = "poly"
+        apply_strategy_kind(self.settings, self._strategy_kind)
 
         self._on_image: Optional[Callable] = None
         self._image_sink: Optional[ImageSink] = None
@@ -162,7 +162,7 @@ class DecoderDSP:
         if kind not in _STRATEGY_CLASSES:
             raise ValueError(f"Unknown strategy kind: {kind}")
         self._strategy_kind = kind
-        self.settings.set_chunk_size(scaled_chunk_size(self.settings, self._base_chunk_size, kind))
+        apply_strategy_kind(self.settings, kind)
         self._dec_strategy = self._decoding_cls()(self.settings)
         f0 = self._manual_f0 if self._f0_mode == "manual" else self._last_f0_q
         if f0 > 0.0:

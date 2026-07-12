@@ -10,10 +10,15 @@ __pycache__/
 *.mp3
 *.mp4
 *.wav
+*.flac
 *.flacc
 
 assets
 decoded
+logs/
+exp/output/
+diff_*.csv
+.pytest_cache/
 
 # C extensions
 *.so

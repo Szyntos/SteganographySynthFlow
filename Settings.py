@@ -4,6 +4,12 @@ import math
 class DspSettings:
     def __init__(self):
         self.fs_out: int = 48_000
+
+        # base_chunk_size is the strategy-independent reference; chunk_size is
+        # derived from it by the active strategy's multiplier. Keeping the base
+        # separate stops the multiplier compounding when something reads the
+        # already-scaled chunk_size back as if it were the base.
+        self.base_chunk_size: int = 480 * 2
         self.chunk_size: int = 480 * 2
 
         self.total_harmonics: int = 50
@@ -15,37 +21,49 @@ class DspSettings:
         self.base_amplitude: float = 0.9
 
         self.bits_per_symbol: int = 2
-        self.bits_per_chunk: int = self.data_harmonics * self.bits_per_symbol
-        self.bytes_per_chunk: int = self.bits_per_chunk // 8
-
-        self.pilot_size: int = self.chunk_size // 2
-        self.data_size: int = self.chunk_size // 2
-
-        self.MSG_FS: int = (self.data_harmonics * self.fs_out) // self.chunk_size
 
         self.decoder_strategy_alpha: float = 1.0
 
         # Encoding strategy chunk-size multipliers (relative to base chunk size)
         self.strategy_chunk_size_multiplier: dict = {"two": 1, "four": 2}
 
+    # Derived values are computed on read so they can never go stale when a
+    # primitive (chunk_size, bits_per_symbol, data_harmonics, fs_out) changes.
+    @property
+    def bits_per_chunk(self) -> int:
+        return self.data_harmonics * self.bits_per_symbol
+
+    @property
+    def bytes_per_chunk(self) -> int:
+        return self.bits_per_chunk // 8
+
+    @property
+    def pilot_size(self) -> int:
+        return self.chunk_size // 2
+
+    @property
+    def data_size(self) -> int:
+        return self.chunk_size // 2
+
+    @property
+    def MSG_FS(self) -> int:
+        return (self.data_harmonics * self.fs_out) // self.chunk_size
+
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         if not 1 <= bits_per_symbol <= 8:
             raise ValueError("bits_per_symbol must be in [1, 8]")
         self.bits_per_symbol = bits_per_symbol
-        self.bits_per_chunk = self.data_harmonics * bits_per_symbol
-        self.bytes_per_chunk = self.bits_per_chunk // 8
 
     def set_chunk_size(self, chunk_size: int) -> None:
         if chunk_size <= 0 or chunk_size % 2 != 0:
             raise ValueError("chunk_size must be a positive even integer")
         self.chunk_size = chunk_size
-        self.pilot_size = self.chunk_size // 2
-        self.data_size = self.chunk_size // 2
-        self.MSG_FS = (self.data_harmonics * self.fs_out) // self.chunk_size
 
     def validate(self) -> None:
         if self.chunk_size <= 0 or self.chunk_size % 2 != 0:
             raise ValueError("chunk_size must be positive and even")
+        if self.base_chunk_size <= 0 or self.base_chunk_size % 2 != 0:
+            raise ValueError("base_chunk_size must be positive and even")
         if self.data_offset + self.data_harmonics > self.total_harmonics:
             raise ValueError("data_offset + data_harmonics exceeds total_harmonics")
         if self.fs_out <= 0:
@@ -259,7 +277,11 @@ class Settings:
         # given name; catch collisions here instead, at construction time.
         seen: dict = {}
         for group in self._groups():
-            for name in vars(group):
+            property_names = [
+                name for name, value in vars(group.__class__).items()
+                if isinstance(value, property)
+            ]
+            for name in list(vars(group)) + property_names:
                 if name in seen and seen[name] is not group.__class__:
                     raise RuntimeError(
                         f"Settings attribute name collision: '{name}' is defined "
@@ -294,7 +316,13 @@ class Settings:
             if self._group_has_own_attr(group, name):
                 setattr(group, name, value)
                 return
-        object.__setattr__(self, name, value)
+        # No group owns this name: refuse rather than silently creating a new
+        # attribute on Settings, which would shadow nothing today but mask
+        # typos and never be read by any consumer.
+        raise AttributeError(
+            f"Settings has no attribute '{name}'; refusing to create one "
+            f"implicitly (set it on the owning sub-config instead)"
+        )
 
     _OWN_ATTRS = frozenset({
         "dsp", "audio_io", "decoder_batching", "sync", "payload", "gui",

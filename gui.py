@@ -63,6 +63,13 @@ class AudioEngine:
             self._enc.set_strategy_kind(kind)
             self._dec.set_strategy_kind(kind)
 
+    def set_tune_offset(self, offset: int) -> None:
+        with self._lock:
+            self._dec.set_tune_offset(offset)
+
+    def get_tune_offset(self) -> int:
+        return self._dec.get_tune_offset()
+
     # ── public controls ──────────────────────────────────────────────────────
     def set_volume(self, vol: float) -> None:
         self._volume = float(vol)
@@ -148,7 +155,16 @@ class AudioEngine:
             self._enc.set_position_fraction(fraction)
 
     def set_f0(self, f0: float) -> None:
+        """Set encoder and decoder pitch together (initial tuning)."""
         self._enc.set_f0(f0)
+        self._dec.set_f0(f0)
+
+    def set_encoder_f0(self, f0: float) -> None:
+        self._enc.set_f0(f0)
+
+    def set_decoder_f0(self, f0: float) -> None:
+        # Only takes effect in manual f0 mode; the estimator modes overwrite
+        # the decoder's f0 per chunk from the received audio.
         self._dec.set_f0(f0)
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
@@ -209,8 +225,18 @@ class App(tk.Tk):
         self._pending_raw_frame = None
         self._pending_decoded_text: Optional[str] = None
         self._pending_raw_decoded_text: Optional[str] = None
+        # Guards against the estimated-f0 poll writing the slider, which
+        # triggers _on_decoder_pitch_change and would feed the estimate back
+        # into the engine (and clobber the user's manual pitch).
+        self._syncing_pitch_ui = False
+        # ttk.Scale.set() fires the slider's command, so the seeding .set()
+        # calls in _build_ui would invoke handlers that reach for widgets not
+        # built yet. The engine is already at its defaults at this point, so
+        # those callbacks have nothing to do.
+        self._ui_ready = False
 
         self._build_ui()
+        self._ui_ready = True
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll_position()
         self._poll_image()
@@ -287,7 +313,7 @@ class App(tk.Tk):
         self._payload_frame = payload_frame
 
         self._payload_var = tk.StringVar(
-            value=os.path.basename(self._engine._settings.modulator_wav_path)
+            value=os.path.basename(self._settings.modulator_wav_path)
         )
         ttk.Label(payload_frame, textvariable=self._payload_var, anchor="w").grid(
             row=0, column=0, sticky="ew", padx=(0, 8)
@@ -369,7 +395,7 @@ class App(tk.Tk):
         bits_frame = ttk.LabelFrame(left, text="Bits per Symbol", padding=8)
         bits_frame.grid(row=6, column=0, sticky="ew", **pad)
 
-        self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
+        self._bits_var = tk.StringVar(value=str(self._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
             bits_frame, textvariable=self._bits_var,
             values=[str(i) for i in range(self._settings.bits_per_symbol_min, self._settings.bits_per_symbol_max + 1)],
@@ -449,8 +475,8 @@ class App(tk.Tk):
             command=self._on_quantize_change,
         ).grid(row=0, column=1)
 
-        # ── pitch ─────────────────────────────────────────────────────────────
-        pitch_frame = ttk.LabelFrame(right, text="Pitch (Hz)", padding=8)
+        # ── encoder pitch ─────────────────────────────────────────────────────
+        pitch_frame = ttk.LabelFrame(right, text="Encoder Pitch (Hz)", padding=8)
         pitch_frame.grid(row=3, column=0, sticky="ew", **pad)
 
         self._pitch_label = ttk.Label(
@@ -466,7 +492,48 @@ class App(tk.Tk):
         self._pitch_slider.set(self._settings.pitch_default_hz)
         self._pitch_slider.grid(row=0, column=0)
 
+        # ── decoder pitch + window tuning ─────────────────────────────────────
+        # Split from the encoder pitch on purpose: detuning the decoder against
+        # a known encoder pitch is how you measure the decoder's f0 tolerance.
+        dec_tune_frame = ttk.LabelFrame(right, text="Decoder Pitch / Tuning", padding=8)
+        dec_tune_frame.grid(row=4, column=0, sticky="ew", **pad)
+
+        ttk.Label(dec_tune_frame, text="Pitch").grid(row=0, column=0, sticky="w")
+        self._dec_pitch_label = ttk.Label(
+            dec_tune_frame, text=f"{self._settings.pitch_default_hz:.0f} Hz", width=8, anchor="e",
+        )
+        self._dec_pitch_label.grid(row=0, column=2, padx=(6, 0))
+
+        self._dec_pitch_slider = ttk.Scale(
+            dec_tune_frame, from_=self._settings.pitch_min_hz, to=self._settings.pitch_max_hz,
+            orient="horizontal", length=self._settings.slider_length_px,
+            command=self._on_decoder_pitch_change,
+        )
+        self._dec_pitch_slider.set(self._settings.pitch_default_hz)
+        self._dec_pitch_slider.grid(row=0, column=1)
+
+        self._link_pitch_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            dec_tune_frame, text="Follow encoder pitch", variable=self._link_pitch_var,
+            command=self._on_link_pitch_change,
+        ).grid(row=1, column=1, sticky="w", pady=(2, 6))
+
+        ttk.Label(dec_tune_frame, text="Offset").grid(row=2, column=0, sticky="w")
+        self._tune_label = ttk.Label(dec_tune_frame, text="0", width=8, anchor="e")
+        self._tune_label.grid(row=2, column=2, padx=(6, 0))
+
+        # Slides the decode window within a chunk, so 0..chunk_size-1 covers
+        # every alignment; the range is restated when the strategy changes.
+        self._tune_slider = ttk.Scale(
+            dec_tune_frame, from_=0, to=self._settings.chunk_size - 1,
+            orient="horizontal", length=self._settings.slider_length_px,
+            command=self._on_tune_change,
+        )
+        self._tune_slider.set(0)
+        self._tune_slider.grid(row=2, column=1)
+
         self._update_kind_dependent_visibility()
+        self._update_decoder_pitch_state()
 
     @staticmethod
     def _make_decoded_text_widget(parent: ttk.Frame, row: int, column: int) -> tk.Text:
@@ -554,6 +621,11 @@ class App(tk.Tk):
 
     def _on_strategy_change(self) -> None:
         self._engine.set_strategy_kind(self._strategy_var.get())
+        # chunk_size follows the strategy, and the tune offset is taken mod
+        # chunk_size, so the slider's range has to follow it too.
+        self._tune_slider.configure(to=self._settings.chunk_size - 1)
+        self._tune_slider.set(self._engine.get_tune_offset())
+        self._tune_label.configure(text=str(self._engine.get_tune_offset()))
 
     def _on_kind_change(self) -> None:
         kind = self._kind_var.get()
@@ -681,11 +753,13 @@ class App(tk.Tk):
     def _poll_image(self) -> None:
         frame = self._pending_image_frame
         if frame is not None:
+            self._pending_image_frame = None
             photo = self._render_frame(frame, self._preview_label)
             if photo is not None:
                 self._preview_photo = photo
         raw_frame = self._pending_raw_frame
         if raw_frame is not None:
+            self._pending_raw_frame = None
             photo = self._render_frame(raw_frame, self._raw_preview_label)
             if photo is not None:
                 self._raw_preview_photo = photo
@@ -705,7 +779,7 @@ class App(tk.Tk):
             self._engine.set_bits_per_symbol(int(self._bits_var.get()))
         except Exception as exc:
             messagebox.showerror("Bits per Symbol Error", str(exc))
-            self._bits_var.set(str(self._engine._settings.bits_per_symbol))
+            self._bits_var.set(str(self._settings.bits_per_symbol))
 
     def _on_source_change(self) -> None:
         self._engine.set_source(self._source_var.get())
@@ -719,16 +793,61 @@ class App(tk.Tk):
         self._vol_label.configure(text=label)
 
     def _on_pitch_change(self, value: str) -> None:
+        if not self._ui_ready:
+            return
         f0 = float(value)
         self._settings.pitch_default_hz = f0
-        self._engine.set_f0(f0)
+        self._engine.set_encoder_f0(f0)
         self._pitch_label.configure(text=f"{f0:.2f} Hz")
+        if self._link_pitch_var.get():
+            self._set_decoder_pitch_ui(f0)
+            self._engine.set_decoder_f0(f0)
+
+    def _on_decoder_pitch_change(self, value: str) -> None:
+        if self._syncing_pitch_ui or not self._ui_ready:
+            return
+        f0 = float(value)
+        self._engine.set_decoder_f0(f0)
+        self._dec_pitch_label.configure(text=f"{f0:.2f} Hz")
+
+    def _set_decoder_pitch_ui(self, f0: float) -> None:
+        """Move the decoder pitch slider without it feeding back into the engine."""
+        self._syncing_pitch_ui = True
+        try:
+            self._dec_pitch_slider.set(
+                min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz)
+            )
+        finally:
+            self._syncing_pitch_ui = False
+        self._dec_pitch_label.configure(text=f"{f0:.2f} Hz")
+
+    def _on_link_pitch_change(self) -> None:
+        self._update_decoder_pitch_state()
+        if self._link_pitch_var.get():
+            f0 = float(self._pitch_slider.get())
+            self._set_decoder_pitch_ui(f0)
+            self._engine.set_decoder_f0(f0)
+
+    def _update_decoder_pitch_state(self) -> None:
+        # The decoder pitch slider is only meaningful in manual f0 mode and
+        # when not slaved to the encoder; the estimator modes drive it instead.
+        manual = self._f0_mode_var.get() == "Manual"
+        editable = manual and not self._link_pitch_var.get()
+        self._dec_pitch_slider.configure(state="normal" if editable else "disabled")
+
+    def _on_tune_change(self, value: str) -> None:
+        if not self._ui_ready:
+            return
+        offset = int(float(value))
+        self._engine.set_tune_offset(offset)
+        self._tune_label.configure(text=str(self._engine.get_tune_offset()))
 
     _F0_MODE_TO_KEY = {"Manual": "manual", "Autocorrelation": "autocorr", "FFT": "fft"}
 
     def _on_f0_mode_change(self, _event=None) -> None:
         mode = self._F0_MODE_TO_KEY[self._f0_mode_var.get()]
         self._engine.set_f0_estimator_mode(mode)
+        self._update_decoder_pitch_state()
 
     def _on_quantize_change(self) -> None:
         self._engine.set_pitch_quantize(self._quantize_var.get())
@@ -736,10 +855,11 @@ class App(tk.Tk):
     def _poll_estimated_f0(self) -> None:
         is_manual = self._f0_mode_var.get() == "Manual"
         if not is_manual:
+            # The estimate is the decoder's own pitch, so it drives the decoder
+            # slider; the encoder slider stays where the user put it.
             f0 = self._engine.get_estimated_f0()
             if f0 > 0.0:
-                self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
-                self._pitch_label.configure(text=f"{f0:.2f} Hz")
+                self._set_decoder_pitch_ui(f0)
 
         drop_run = self._engine.get_drop_run()
         if self._engine.is_gated() or drop_run > 0:

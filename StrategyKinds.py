@@ -17,5 +17,13 @@ DECODING_STRATEGY_CLASSES = {
 }
 
 
-def scaled_chunk_size(settings, base_chunk_size: int, strategy_kind: str) -> int:
-    return base_chunk_size * settings.strategy_chunk_size_multiplier[strategy_kind]
+def scaled_chunk_size(settings, strategy_kind: str) -> int:
+    # Derived from settings.base_chunk_size, never from the live (already
+    # scaled) settings.chunk_size: reading the scaled value back as a base is
+    # what makes the multiplier compound across facades.
+    return settings.base_chunk_size * settings.strategy_chunk_size_multiplier[strategy_kind]
+
+
+def apply_strategy_kind(settings, strategy_kind: str) -> None:
+    """Point settings.chunk_size at the size the given strategy needs."""
+    settings.set_chunk_size(scaled_chunk_size(settings, strategy_kind))

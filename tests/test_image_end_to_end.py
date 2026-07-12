@@ -28,14 +28,6 @@ def test_image(tmp_path):
     return str(path)
 
 
-def make_harmonic_generator(settings):
-    generator = AdditiveWaveGenerator(settings)
-    generator.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
-    generator.set_phases([0.0] * settings.total_harmonics)
-    generator.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
-    return generator
-
-
 # f0 constraints: all harmonics below Nyquist (total_harmonics * f0 < fs_out/2,
 # so f0 < 480) and at least two fundamental cycles per half-chunk so adjacent
 # harmonics sit >= 2 DFT bins apart, outside the Hann window's leakage
@@ -49,7 +41,7 @@ def run_audio_round_trip(mode, settings, image_path, f0=400.0, loops=2):
 
     serializer = ImageSerializer(settings, mode)
     encoding_strategy = TwoSplitEncodingStrategy(
-        settings, make_harmonic_generator(settings), serializer)
+        settings, AdditiveWaveGenerator.harmonic(settings), serializer)
     encoding_strategy.load_payload(payload)
     encoder = Encoder(encoding_strategy)
 

@@ -199,6 +199,10 @@ class EncoderApp(tk.Tk):
         self._settings = settings
         self._engine = EncoderEngine(settings)
         self._running = False
+        # Guards against the note-control poll writing the slider, which
+        # triggers _on_pitch_change and would feed the (range-clamped) slider
+        # value back into the engine, overriding the actual MIDI/keyboard f0.
+        self._syncing_pitch_ui = False
         self._devices = list_output_devices()
         self._keyboard_input = KeyboardNoteInput(self, self._engine.get_note_state())
 
@@ -283,7 +287,7 @@ class EncoderApp(tk.Tk):
         payload_frame.columnconfigure(0, weight=1)
 
         self._payload_var = tk.StringVar(
-            value=os.path.basename(self._engine._settings.modulator_wav_path)
+            value=os.path.basename(self._settings.modulator_wav_path)
         )
         ttk.Label(payload_frame, textvariable=self._payload_var, anchor="w").grid(
             row=0, column=0, sticky="ew", padx=(0, 8)
@@ -335,7 +339,7 @@ class EncoderApp(tk.Tk):
         bits_frame = ttk.LabelFrame(left, text="Bits per Symbol", padding=8)
         bits_frame.grid(row=5, column=0, sticky="ew", **pad)
 
-        self._bits_var = tk.StringVar(value=str(self._engine._settings.bits_per_symbol))
+        self._bits_var = tk.StringVar(value=str(self._settings.bits_per_symbol))
         bits_combo = ttk.Combobox(
             bits_frame, textvariable=self._bits_var,
             values=[str(i) for i in range(self._settings.bits_per_symbol_min, self._settings.bits_per_symbol_max + 1)],
@@ -518,7 +522,7 @@ class EncoderApp(tk.Tk):
             self._engine.set_bits_per_symbol(int(self._bits_var.get()))
         except Exception as exc:
             messagebox.showerror("Bits per Symbol Error", str(exc))
-            self._bits_var.set(str(self._engine._settings.bits_per_symbol))
+            self._bits_var.set(str(self._settings.bits_per_symbol))
 
     def _on_volume_change(self, value: str) -> None:
         db = float(value)
@@ -529,6 +533,8 @@ class EncoderApp(tk.Tk):
         self._vol_label.configure(text=label)
 
     def _on_pitch_change(self, value: str) -> None:
+        if self._syncing_pitch_ui:
+            return
         f0 = float(value)
         self._settings.pitch_default_hz = f0
         self._engine.set_f0(f0)
@@ -565,7 +571,11 @@ class EncoderApp(tk.Tk):
     def _poll_note_control(self) -> None:
         if self._midi_enabled_var.get() or self._keyboard_enabled_var.get():
             f0 = self._engine.get_f0()
-            self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
+            self._syncing_pitch_ui = True
+            try:
+                self._pitch_slider.set(min(max(f0, self._settings.pitch_min_hz), self._settings.pitch_max_hz))
+            finally:
+                self._syncing_pitch_ui = False
             self._pitch_label.configure(text=f"{f0:.2f} Hz")
         self._piano.set_active_note(self._engine.get_active_note())
         self.after(self._settings.gui_note_poll_interval_ms, self._poll_note_control)

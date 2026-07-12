@@ -29,6 +29,8 @@ class AudioSink(Sink):
                  sample_rate: Optional[int] = None,
                  max_buffer_seconds: Optional[float] = None):
         super().__init__(framing_sync_controller, sink_behaviour)
+        if sample_rate is None and settings is None:
+            raise ValueError("AudioSink: provide either settings or an explicit sample_rate")
         self._sample_rate = int(sample_rate if sample_rate is not None else settings.MSG_FS)
         buffer_seconds = (
             max_buffer_seconds if max_buffer_seconds is not None

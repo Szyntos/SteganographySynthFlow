@@ -7,6 +7,18 @@ from Settings import Settings
 
 
 class AdditiveWaveGenerator:
+    @classmethod
+    def harmonic(cls, settings: Settings) -> "AdditiveWaveGenerator":
+        """The project's standard carrier: total_harmonics integer partials
+        (1×, 2×, ... f0) with 1/n amplitudes and zero initial phases."""
+        generator = cls(settings)
+        generator.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
+        generator.set_phases([0.0] * settings.total_harmonics)
+        generator.set_amps(
+            [settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)]
+        )
+        return generator
+
     def __init__(self, settings: Settings):
         self._settings = settings
         self._sample_rate: float = 0.0

@@ -8,21 +8,13 @@ from Payload.pixel_codec import make_pixel_codec
 from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextSerializer
 from SerializerMode import SerializerMode
 from Settings import Settings
-from StrategyKinds import ENCODING_STRATEGY_CLASSES, scaled_chunk_size
+from StrategyKinds import ENCODING_STRATEGY_CLASSES, apply_strategy_kind
 
 _STRATEGY_CLASSES = ENCODING_STRATEGY_CLASSES
 
 _PAYLOAD_KINDS = ("audio", "image", "binary", "text")
 _CODEC_PAYLOAD_KINDS = ("image", "binary", "text")
 _CODEC_PAYLOAD_CLASSES = {"image": ImagePayload, "binary": BinaryPayload, "text": TextPayload}
-
-
-def _make_harmonic_generator(settings: Settings) -> AdditiveWaveGenerator:
-    gen = AdditiveWaveGenerator(settings)
-    gen.set_omegas([float(i + 1) for i in range(settings.total_harmonics)])
-    gen.set_phases([0.0] * settings.total_harmonics)
-    gen.set_amps([settings.base_amplitude / (i + 1) for i in range(settings.total_harmonics)])
-    return gen
 
 
 class EncoderDSP:
@@ -44,9 +36,9 @@ class EncoderDSP:
 
         self._payload_kind: str = "audio"
         self._strategy_kind: str = "two"
-        self._base_chunk_size: int = self.settings.chunk_size
         self._codec_mode: SerializerMode = SerializerMode.DIGITAL
         self._f0: float = 0.0
+        apply_strategy_kind(self.settings, self._strategy_kind)
 
         self._audio_payload = AudioPayload()
         self._audio_payload.load_from_file(self.settings.modulator_wav_path)
@@ -64,7 +56,7 @@ class EncoderDSP:
         self._text_codec = make_pixel_codec(self._codec_mode, self.settings)
         self._text_payload = TextPayload(self.settings, self._text_codec)
 
-        self._wave_generator = _make_harmonic_generator(self.settings)
+        self._wave_generator = AdditiveWaveGenerator.harmonic(self.settings)
 
         self._strategies: Dict[str, EncodingStrategy] = {
             kind: self._make_strategy_for(kind) for kind in _PAYLOAD_KINDS
@@ -119,8 +111,8 @@ class EncoderDSP:
         if kind not in _STRATEGY_CLASSES:
             raise ValueError(f"Unknown strategy kind: {kind}")
         self._strategy_kind = kind
-        self.settings.set_chunk_size(scaled_chunk_size(self.settings, self._base_chunk_size, kind))
-        self._wave_generator = _make_harmonic_generator(self.settings)
+        apply_strategy_kind(self.settings, kind)
+        self._wave_generator = AdditiveWaveGenerator.harmonic(self.settings)
         self._rebuild_all_strategies()
 
     def get_payload_kind(self) -> str:
@@ -164,7 +156,7 @@ class EncoderDSP:
         for kind in _CODEC_PAYLOAD_KINDS:
             self._reload_codec_payload(kind, self._codec_mode)
 
-        self._wave_generator = _make_harmonic_generator(self.settings)
+        self._wave_generator = AdditiveWaveGenerator.harmonic(self.settings)
         self._rebuild_all_strategies()
 
     def load_payload_file(self, file_path: str) -> None:
