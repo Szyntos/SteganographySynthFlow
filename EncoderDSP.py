@@ -9,6 +9,7 @@ from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextS
 from SerializerMode import SerializerMode
 from Settings import Settings
 from StrategyKinds import ENCODING_STRATEGY_CLASSES, apply_strategy_kind
+from WaveParams import WaveParams
 
 _STRATEGY_CLASSES = ENCODING_STRATEGY_CLASSES
 
@@ -56,13 +57,42 @@ class EncoderDSP:
         self._text_codec = make_pixel_codec(self._codec_mode, self.settings)
         self._text_payload = TextPayload(self.settings, self._text_codec)
 
-        self._wave_generator = AdditiveWaveGenerator.harmonic(self.settings)
+        self._wave_params: Optional[WaveParams] = None
+        self._wave_generator = self._make_wave_generator()
 
         self._strategies: Dict[str, EncodingStrategy] = {
             kind: self._make_strategy_for(kind) for kind in _PAYLOAD_KINDS
         }
         self._encoding_strategy: EncodingStrategy = self._strategies[self._payload_kind]
         self._encoder = Encoder(self._encoding_strategy)
+
+    # ── wave shape ───────────────────────────────────────────────────────────
+    def _make_wave_generator(self) -> AdditiveWaveGenerator:
+        generator = AdditiveWaveGenerator.harmonic(self.settings)
+        params = self._wave_params
+        if params is not None and len(params.amps) == self.settings.total_harmonics:
+            generator.set_omegas(list(params.omegas))
+            generator.set_phases(list(params.phases))
+            generator.set_amps(list(params.amps))
+        return generator
+
+    def get_wave_params(self) -> WaveParams:
+        if self._wave_params is not None:
+            return self._wave_params
+        return WaveParams.harmonic_default(self.settings)
+
+    def set_wave_params(self, params: WaveParams) -> None:
+        params.validate()
+        if len(params.amps) != self.settings.total_harmonics:
+            raise ValueError(
+                f"wave params carry {len(params.amps)} harmonics, "
+                f"expected {self.settings.total_harmonics}")
+        self._wave_params = params
+        # Retune the live generator in place: strategies keep their reference,
+        # so clock position and running phases stay continuous.
+        self._wave_generator.set_omegas(list(params.omegas))
+        self._wave_generator.set_phases(list(params.phases))
+        self._wave_generator.set_amps(list(params.amps))
 
     # ── strategy assembly ────────────────────────────────────────────────────
     def _encoding_cls(self):
@@ -112,7 +142,7 @@ class EncoderDSP:
             raise ValueError(f"Unknown strategy kind: {kind}")
         self._strategy_kind = kind
         apply_strategy_kind(self.settings, kind)
-        self._wave_generator = AdditiveWaveGenerator.harmonic(self.settings)
+        self._wave_generator = self._make_wave_generator()
         self._rebuild_all_strategies()
 
     def get_payload_kind(self) -> str:
@@ -156,7 +186,7 @@ class EncoderDSP:
         for kind in _CODEC_PAYLOAD_KINDS:
             self._reload_codec_payload(kind, self._codec_mode)
 
-        self._wave_generator = AdditiveWaveGenerator.harmonic(self.settings)
+        self._wave_generator = self._make_wave_generator()
         self._rebuild_all_strategies()
 
     def load_payload_file(self, file_path: str) -> None:

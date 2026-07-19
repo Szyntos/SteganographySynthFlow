@@ -1,5 +1,6 @@
 """Decoder rack module: tuning, reconstruction and decoded output views."""
 
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
@@ -12,6 +13,7 @@ from gui.widgets import (LabeledScale, Panel, Section, Segmented,
 from SerializerMode import SerializerMode
 from Settings import Settings
 from Sink import SinkBehaviour
+from WaveParams import WaveParams
 
 _F0_MODES = {"Manual": "manual", "Autocorrelation": "autocorr", "FFT": "fft"}
 _RESAMPLE_METHODS = {
@@ -182,6 +184,18 @@ class DecoderPanel(Panel):
         resample_combo.pack(side="left")
         resample_combo.bind("<<ComboboxSelected>>", self._on_resample)
 
+        # ── carrier wave (standalone only: linked mode syncs it from the
+        #    encoder's wave editor automatically) ─────────────────────────────
+        if not linked:
+            wave_row = ttk.Frame(tune.content)
+            wave_row.grid(row=5, column=0, columnspan=2, sticky="ew", pady=2)
+            ttk.Label(wave_row, text="Wave", style="Dim.TLabel", width=9).pack(side="left")
+            ttk.Button(wave_row, text="Import wave…",
+                       command=self._on_import_wave).pack(side="left")
+            self._wave_var = tk.StringVar(value="harmonic (default)")
+            ttk.Label(wave_row, textvariable=self._wave_var,
+                      style="Value.TLabel").pack(side="left", padx=8)
+
         # ── reconstruction ──────────────────────────────────────────────────
         recon = Section(body, "Reconstruction")
         recon.grid(row=row, column=0, sticky="ew"); row += 1
@@ -319,6 +333,24 @@ class DecoderPanel(Panel):
 
     def _on_resample(self, _event=None) -> None:
         self._engine.set_resample_method(_RESAMPLE_METHODS[self._resample_var.get()])
+
+    def _on_import_wave(self) -> None:
+        file_path = filedialog.askopenfilename(
+            title="Import wave settings (exported from the encoder)",
+            filetypes=[("SSF wave files", "*.json"), ("All files", "*.*")])
+        if not file_path:
+            return
+        try:
+            params = WaveParams.from_json_file(file_path)
+            if len(params.omegas) != self._settings.total_harmonics:
+                raise ValueError(
+                    f"File carries {len(params.omegas)} harmonics, this rack "
+                    f"runs {self._settings.total_harmonics}")
+            self._engine.set_harmonic_scalars(params.omegas)
+        except Exception as exc:
+            messagebox.showerror("Import Wave Error", str(exc))
+            return
+        self._wave_var.set(os.path.basename(file_path))
 
     def _on_sink(self, value: str) -> None:
         behaviour = SinkBehaviour.LIVE if value == "live" else SinkBehaviour.CLEAN

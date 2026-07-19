@@ -59,6 +59,10 @@ class DecoderDSP:
 
         self._f0_tracker = F0Tracker(self.settings)
 
+        # Carrier frequency scalars imported from the encoder's wave editor;
+        # None means the standard integer partials.
+        self._harmonic_scalars: Optional[List[float]] = None
+
         self._dec_strategy: DecodingStrategy = self._decoding_cls()(self.settings)
         self._dec_strategy.set_f0_resolver(self._resolve_window_f0)
         self._decoder: Optional[Decoder] = None
@@ -155,6 +159,7 @@ class DecoderDSP:
         apply_strategy_kind(self.settings, kind)
         self._dec_strategy = self._decoding_cls()(self.settings)
         self._dec_strategy.set_f0_resolver(self._resolve_window_f0)
+        self._dec_strategy.set_harmonic_scalars(self._harmonic_scalars)
         self._tune_offset = 0
         self._pending_skip = 0
         self._rebuild_decode_chain()
@@ -180,6 +185,10 @@ class DecoderDSP:
         if self._payload_kind != "audio":
             self._dec_strategy.reconfigure()
             self._rebuild_decode_chain()
+
+    def set_harmonic_scalars(self, scalars: Optional[List[float]]) -> None:
+        self._harmonic_scalars = list(scalars) if scalars is not None else None
+        self._dec_strategy.set_harmonic_scalars(self._harmonic_scalars)
 
     def set_sink_behaviour(self, behaviour: SinkBehaviour) -> None:
         self._sink_behaviour = behaviour

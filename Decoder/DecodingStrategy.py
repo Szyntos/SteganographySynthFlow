@@ -33,6 +33,10 @@ class DecodingStrategy(ABC):
         # Number of buffered samples that include gated (zero-fed) input;
         # windows overlapping them must not be decoded.
         self._dirty_tail: int = 0
+        # Per-harmonic frequency scalars; None means integer partials 1..H.
+        # Must match the encoder's wave omegas or the projections miss the
+        # carrier entirely.
+        self._harmonic_scalars: Optional[List[float]] = None
         self.reconfigure()
         self._f0: float = 440.0
 
@@ -53,6 +57,11 @@ class DecodingStrategy(ABC):
         a drop-tolerance reset must not shift window alignment, which the
         FIFO's fill level embodies."""
         self._m_state = np.zeros(self._num_rows)
+
+    def set_harmonic_scalars(self, scalars: Optional[List[float]]) -> None:
+        self._harmonic_scalars = list(scalars) if scalars is not None else None
+        self._analysis_cache_key = None
+        self._analysis_cache = None
 
     def set_f0_resolver(self, resolver: Optional[Callable[[List[float], bool], float]]) -> None:
         self._f0_resolver = resolver
@@ -95,9 +104,11 @@ class DecodingStrategy(ABC):
         # key that omits the window geometry silently returns matrices built
         # for the previous chunk_size/layout.
         total_harmonics = self._settings.total_harmonics
+        scalars = self._harmonic_scalars
         key = (
             self._f0, fs, window_size, total_harmonics,
             self._layout.pilot_start, self._layout.data_start,
+            tuple(scalars) if scalars is not None else None,
         )
         if self._analysis_cache_key == key and self._analysis_cache is not None:
             return self._analysis_cache
@@ -123,8 +134,12 @@ class DecodingStrategy(ABC):
         t_p = n + self._layout.pilot_start + win_start
         t_d = n + self._layout.data_start + win_start
 
-        # omega_k = 2*pi*(k+1)*f0/fs for k in [0..total_harmonics-1]
-        harmonic_nums = np.arange(1, total_harmonics + 1, dtype=np.float64)
+        # omega_k = 2*pi*(k+1)*f0/fs for k in [0..total_harmonics-1], unless
+        # custom frequency scalars were imported from the encoder's wave.
+        if scalars is not None and len(scalars) == total_harmonics:
+            harmonic_nums = np.asarray(scalars, dtype=np.float64)
+        else:
+            harmonic_nums = np.arange(1, total_harmonics + 1, dtype=np.float64)
         freqs = harmonic_nums * self._f0
         valid_mask = (freqs > 0.0) & (freqs <= nyquist)
         omegas = np.where(valid_mask, 2.0 * math.pi * freqs / fs, 0.0)

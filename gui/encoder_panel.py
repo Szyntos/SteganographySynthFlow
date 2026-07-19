@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
+from gui.wave_editor import WaveEditorWindow, WaveViewer
 from gui.widgets import FileRow, LabeledScale, Panel, Section, Segmented
 from SerializerMode import SerializerMode
 from Settings import Settings
@@ -124,6 +125,14 @@ class EncoderPanel(Panel):
             init=settings.pitch_default_hz, step=5)
         self._pitch.grid(row=0, column=0, sticky="ew")
 
+        # ── wave shape ──────────────────────────────────────────────────────
+        wave = Section(body, "Waveform  (click to edit)")
+        wave.grid(row=4, column=0, sticky="ew")
+        self._wave_viewer = WaveViewer(
+            wave.content, engine.get_wave_params(), on_click=self._open_wave_editor)
+        self._wave_viewer.pack(anchor="w")
+        self._wave_editor = None
+
         self._update_kind_state()
         self._poll_position()
 
@@ -188,6 +197,23 @@ class EncoderPanel(Panel):
         self._engine.set_encoder_f0(f0)
         if self._on_pitch_change is not None:
             self._on_pitch_change(f0)
+
+    def _open_wave_editor(self) -> None:
+        if self._wave_editor is not None and self._wave_editor.winfo_exists():
+            self._wave_editor.lift()
+            self._wave_editor.focus_set()
+            return
+        self._wave_editor = WaveEditorWindow(
+            self.winfo_toplevel(), self._settings,
+            self._engine.get_wave_params(), self._on_wave_change)
+
+    def _on_wave_change(self, params) -> None:
+        try:
+            self._engine.set_wave_params(params)
+        except Exception as exc:
+            messagebox.showerror("Wave Error", str(exc))
+            return
+        self._wave_viewer.set_params(params)
 
     def _update_kind_state(self) -> None:
         self._codec_seg.set_enabled(self._kind_seg.get() != "audio")

@@ -32,6 +32,7 @@ from NoteState import NoteState, midi_note_to_hz
 from SerializerMode import SerializerMode
 from Settings import Settings
 from Sink import SinkBehaviour
+from WaveParams import WaveParams
 
 
 def list_audio_devices(kind: str) -> List[Tuple[int, str]]:
@@ -124,6 +125,14 @@ class _EncoderSideMixin:
     def get_encoder_f0(self) -> float:
         return self._enc.get_f0()
 
+    def get_wave_params(self) -> WaveParams:
+        with self._lock:
+            return self._enc.get_wave_params()
+
+    def set_wave_params(self, params: WaveParams) -> None:
+        with self._lock:
+            self._enc.set_wave_params(params)
+
     # ── note control ────────────────────────────────────────────────────────
     def list_midi_devices(self) -> List[str]:
         return list_midi_input_devices()
@@ -162,6 +171,10 @@ class _DecoderSideMixin:
     def set_sink_behaviour(self, behaviour: SinkBehaviour) -> None:
         with self._lock:
             self._dec.set_sink_behaviour(behaviour)
+
+    def set_harmonic_scalars(self, scalars) -> None:
+        with self._lock:
+            self._dec.set_harmonic_scalars(scalars)
 
     def set_on_image(self, cb: Optional[Callable]) -> None:
         with self._lock:
@@ -408,6 +421,12 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
 
     def set_encoder_f0(self, f0: float) -> None:
         self._enc.set_f0(f0)
+
+    def set_wave_params(self, params: WaveParams) -> None:
+        # Linked: the decoder's projections must chase the encoder's omegas.
+        with self._lock:
+            self._enc.set_wave_params(params)
+            self._dec.set_harmonic_scalars(params.omegas)
 
     def _callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
         _cb_start = time.perf_counter()
