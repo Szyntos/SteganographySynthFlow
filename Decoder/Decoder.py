@@ -41,8 +41,9 @@ class Decoder:
     def get_output_fifo_size(self) -> int:
         return self._audio_chunk_output_fifo.get_size()
 
-    def process(self, input_samples: AudioChunk, num_samples: int) -> AudioChunk:
-        decoded_symbols: List[SymbolRow] = self._decoding_strategy.decode_samples(input_samples, num_samples)
+    def process(self, input_samples: AudioChunk, num_samples: int, gated: bool = False) -> AudioChunk:
+        decoded_symbols: List[SymbolRow] = self._decoding_strategy.decode_samples(
+            input_samples, num_samples, gated=gated)
         for symbol_row in decoded_symbols:
             samples = self._resampler.push_row(symbol_row.get_offsets())
             if samples:

@@ -18,6 +18,7 @@ class EncodingStrategy(ABC):
         self._num_rows: int = 0
         self._internal_clock: int = 0
         self._f0: float = 0.0
+        self._pending_f0: float | None = None
         self._clock_position = 0
         self._current_row: SymbolRow | None = None
         self._layout: SplitLayout | None = None
@@ -42,7 +43,14 @@ class EncodingStrategy(ABC):
         self._additive_wave_generator = additive_wave_generator
 
     def set_f0(self, f0: float):
-        self._f0 = f0
+        # Deferred to the next chunk boundary: a pitch step inside a chunk
+        # would give it an old-pitch pilot and a new-pitch data half, which
+        # decodes as a one-chunk noise burst.
+        if self._clock_position == 0:
+            self._f0 = f0
+            self._pending_f0 = None
+        else:
+            self._pending_f0 = f0
 
     def _get_phase_offsets(self) -> List[float]:
         if self._current_row is None:
@@ -59,6 +67,9 @@ class EncodingStrategy(ABC):
         while remaining > 0:
             if self._clock_position == 0:
                 self._current_row = None
+                if self._pending_f0 is not None:
+                    self._f0 = self._pending_f0
+                    self._pending_f0 = None
 
             segment_len = min(remaining, self._internal_clock - self._clock_position)
             segment_envelope = self._layout.envelope[self._clock_position:self._clock_position + segment_len]

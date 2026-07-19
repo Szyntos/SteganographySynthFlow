@@ -4,7 +4,7 @@ from AudioChunk import AudioChunk
 from Decoder import Decoder, DecodingStrategy
 from DropTolerance import DropAction, DropTolerance, DropToleranceConfig
 from EnergyGate import EnergyGate, EnergyGateConfig
-from F0Estimator import AutocorrF0Estimator, FFTF0Estimator, quantize_to_chromatic_hz
+from F0Estimator import F0Tracker
 from Framing import FramingSyncController
 from Payload.pixel_codec import make_pixel_codec
 from SerializerMode import SerializerMode
@@ -57,23 +57,13 @@ class DecoderDSP:
         self._tune_offset: int = 0
         self._pending_skip: int = 0
 
+        self._f0_tracker = F0Tracker(self.settings)
+
         self._dec_strategy: DecodingStrategy = self._decoding_cls()(self.settings)
+        self._dec_strategy.set_f0_resolver(self._resolve_window_f0)
         self._decoder: Optional[Decoder] = None
         self._rebuild_decode_chain()
 
-        self._manual_f0: float = self.settings.pitch_default_hz
-        self._f0_mode: str = "manual"  # "manual", "autocorr", "fft"
-        self._pitch_quantize: bool = False
-        self._autocorr_estimator = AutocorrF0Estimator(
-            f_min_hz=self.settings.autocorr_f0_min_hz, f_max_hz=self.settings.autocorr_f0_max_hz,
-            rms_floor=self.settings.autocorr_rms_floor, corr_threshold=self.settings.autocorr_corr_threshold,
-        )
-        self._fft_estimator = FFTF0Estimator(
-            n_fft=self.settings.fft_f0_n_fft, f_min_hz=self.settings.fft_f0_min_hz,
-            f_max_hz=self.settings.fft_f0_max_hz, rms_floor=self.settings.fft_rms_floor,
-        )
-        self._last_f0_q: float = 0.0
-        self._last_confidence: float = 0.0
         self._energy_gate = EnergyGate(EnergyGateConfig(
             ema_alpha=self.settings.energy_gate_ema_alpha, abs_floor=self.settings.energy_gate_abs_floor,
             drop_ratio=self.settings.energy_gate_drop_ratio,
@@ -164,9 +154,7 @@ class DecoderDSP:
         self._strategy_kind = kind
         apply_strategy_kind(self.settings, kind)
         self._dec_strategy = self._decoding_cls()(self.settings)
-        f0 = self._manual_f0 if self._f0_mode == "manual" else self._last_f0_q
-        if f0 > 0.0:
-            self._dec_strategy.set_f0(f0)
+        self._dec_strategy.set_f0_resolver(self._resolve_window_f0)
         self._tune_offset = 0
         self._pending_skip = 0
         self._rebuild_decode_chain()
@@ -281,26 +269,27 @@ class DecoderDSP:
 
     # ── f0 / gating state ────────────────────────────────────────────────────
     def set_f0(self, f0: float) -> None:
-        self._manual_f0 = float(f0)
-        if self._f0_mode == "manual":
-            self._dec_strategy.set_f0(self._manual_f0)
+        # Windows already (partially) buffered in the strategy FIFO were
+        # captured at the old pitch; the new manual f0 must not apply to them.
+        chunk = self.settings.chunk_size
+        buffered = self._dec_strategy.get_input_fifo_size()
+        defer = (buffered + chunk - 1) // chunk
+        self._f0_tracker.set_manual_f0(f0, defer_windows=defer)
 
     def set_f0_estimator_mode(self, mode: str) -> None:
-        if mode not in ("manual", "autocorr", "fft"):
-            raise ValueError(f"Unknown f0 estimator mode: {mode}")
-        self._f0_mode = mode
-        self._last_f0_q = 0.0
-        if mode == "manual":
-            self._dec_strategy.set_f0(self._manual_f0)
+        self._f0_tracker.set_mode(mode)
 
     def set_pitch_quantize(self, enabled: bool) -> None:
-        self._pitch_quantize = bool(enabled)
+        self._f0_tracker.set_quantize(enabled)
 
     def get_estimated_f0(self) -> float:
-        return self._last_f0_q
+        return self._f0_tracker.f0
 
     def get_confidence(self) -> float:
-        return self._last_confidence
+        return self._f0_tracker.confidence
+
+    def _resolve_window_f0(self, pilot_samples: List[float], dirty: bool = False) -> float:
+        return self._f0_tracker.resolve(pilot_samples, float(self.settings.fs_out), dirty=dirty)
 
     def get_drop_run(self) -> int:
         return self._drop_tolerance.drop_run
@@ -311,10 +300,8 @@ class DecoderDSP:
     def _handle_missing(self) -> None:
         action = self._drop_tolerance.push(True)
         if action == DropAction.RESET_NOW:
-            self._dec_strategy.reconfigure()
-            self._autocorr_estimator.reset()
-            self._fft_estimator.reset()
-            self._last_f0_q = 0.0
+            self._dec_strategy.reset_decode_state()
+            self._f0_tracker.reset()
 
     def reset(self) -> None:
         self._energy_gate.reset()
@@ -337,30 +324,21 @@ class DecoderDSP:
         self._is_gated = self._energy_gate.is_drop(rms_now)
         if self._is_gated:
             self._handle_missing()
+            # Mock silence still flows into the decoder so the chunk FIFO
+            # keeps advancing: dropping gated blocks would shift window
+            # alignment by the gap length and corrupt everything after it.
+            self._decoder.process(AudioChunk([0.0] * len(samples)), num_samples, gated=True)
             return [0.0] * num_samples
 
-        if self._f0_mode == "manual":
-            f_hat = self._manual_f0
-            self._last_confidence = 1.0
-        else:
-            estimator = self._autocorr_estimator if self._f0_mode == "autocorr" else self._fft_estimator
-            f_hat = estimator.estimate(samples, float(self.settings.fs_out))
-            self._last_confidence = estimator.confidence
+        # f0 is resolved inside the decoder, once per chunk-aligned window
+        # (via the strategy's f0 resolver), so estimation always runs on the
+        # pilot segment of the exact window being decoded. The block must be
+        # fed to the decoder unconditionally or the chunk FIFO would starve.
+        dec_chunk = self._decoder.process(AudioChunk(list(samples)), num_samples)
 
-        if self._pitch_quantize and f_hat > 0.0:
-            f_hat = quantize_to_chromatic_hz(f_hat, self.settings.pitch_quantizer_a4_hz)
-
-        if f_hat > 0.0:
-            self._last_f0_q = f_hat
-        elif self._last_f0_q > 0.0:
-            f_hat = self._last_f0_q
-
-        if f_hat <= 0.0:
+        if not self._f0_tracker.has_pitch():
             self._handle_missing()
             return [0.0] * num_samples
 
         self._drop_tolerance.push(False)
-        self._dec_strategy.set_f0(f_hat)
-
-        dec_chunk = self._decoder.process(AudioChunk(list(samples)), num_samples)
         return dec_chunk.get_samples()

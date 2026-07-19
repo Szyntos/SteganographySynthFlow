@@ -1,7 +1,7 @@
 import cmath
 import math
 from abc import ABC
-from typing import List
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -24,6 +24,15 @@ class DecodingStrategy(ABC):
         self._mag_threshold: float = 1e-6
         self._analysis_cache_key: tuple | None = None
         self._analysis_cache: tuple | None = None
+        # Called once per chunk-aligned decode window with that window's pilot
+        # segment and a dirty flag; its return value becomes the f0 the window
+        # is decoded with. Dirty windows (overlapping gated/silent input) are
+        # dropped, but the resolver still sees them so its own per-window
+        # bookkeeping (e.g. deferred manual-f0 adoption) stays in step.
+        self._f0_resolver: Optional[Callable[[List[float], bool], float]] = None
+        # Number of buffered samples that include gated (zero-fed) input;
+        # windows overlapping them must not be decoded.
+        self._dirty_tail: int = 0
         self.reconfigure()
         self._f0: float = 440.0
 
@@ -34,9 +43,26 @@ class DecodingStrategy(ABC):
         self._m_state = np.zeros(self._num_rows)
         self._analysis_cache_key = None
         self._analysis_cache = None
+        self._dirty_tail = 0
 
     def set_f0(self, f0: float):
         self._f0 = f0
+
+    def reset_decode_state(self) -> None:
+        """Clears the decoded-symbol state without touching the input FIFO:
+        a drop-tolerance reset must not shift window alignment, which the
+        FIFO's fill level embodies."""
+        self._m_state = np.zeros(self._num_rows)
+
+    def set_f0_resolver(self, resolver: Optional[Callable[[List[float], bool], float]]) -> None:
+        self._f0_resolver = resolver
+
+    def pilot_segment(self, samples: List[float]) -> List[float]:
+        """The unmodulated pilot region of one chunk-aligned decode window —
+        the cleanest material for f0 estimation."""
+        segment_len = self._internal_clock // self._layout.phases
+        start = self._layout.pilot_start
+        return samples[start:start + segment_len]
 
     def get_internal_clock(self) -> int:
         return self._internal_clock
@@ -44,14 +70,24 @@ class DecodingStrategy(ABC):
     def get_input_fifo_size(self) -> int:
         return self._audio_chunk_input_fifo.get_size()
 
-    def decode_samples(self, input_samples: AudioChunk, num_samples: int) -> List[SymbolRow]:
+    def decode_samples(self, input_samples: AudioChunk, num_samples: int,
+                       gated: bool = False) -> List[SymbolRow]:
         self._audio_chunk_input_fifo.push(input_samples.get_samples())
+        if gated:
+            self._dirty_tail = self._audio_chunk_input_fifo.get_size()
 
         decoded_symbols: List[SymbolRow] = []
 
         while self._audio_chunk_input_fifo.can_read(self._internal_clock):
             to_decode: List[float] = self._audio_chunk_input_fifo.pop_or_empty(self._internal_clock)
-            decoded_symbols.append(self._decode(to_decode))
+            dirty = self._dirty_tail > 0
+            self._dirty_tail = max(0, self._dirty_tail - self._internal_clock)
+            if self._f0_resolver is not None:
+                f0 = self._f0_resolver(self.pilot_segment(to_decode), dirty)
+                if not dirty:
+                    self._f0 = f0
+            if not dirty:
+                decoded_symbols.append(self._decode(to_decode))
         return decoded_symbols
 
     def _get_analysis_arrays(self, fs: float, window_size: int):
