@@ -36,12 +36,13 @@ recovers the phase offsets and reconstructs the payload in real time.
 Requires Python 3.10+ and the packages in `requirements.txt`
 (`pip install -r requirements.txt`).
 
-- `python split/encoder_gui.py` — encoder: pick a payload, play notes via
-  MIDI/keyboard, outputs the encoded tone to an audio device.
-- `python split/decoder_gui.py` — decoder: listens to an input device and
-  reconstructs the payload live.
-- `python gui.py` — combined encoder+decoder loopback GUI for
-  experimentation.
+- `python -m gui` — the rack GUI. Starts as an empty rack; add an Encoder
+  and/or Decoder module. With only one module it runs standalone against real
+  audio devices; with both, the encoder feeds the decoder internally
+  (loopback) and their transmission parameters are linked. A playable piano
+  keyboard bar (mouse, QWERTY, MIDI device, MIDI file) spans the bottom
+  whenever an encoder is racked. Run a second instance for an independent
+  encoder/decoder pair.
 - `python main.py` — headless encode→decode round trip that plots
   encoded/decoded/expected signals.
 - `python exp/encode_vs_carrier.py` — dumps diagnostic WAVs (carrier vs.
