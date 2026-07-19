@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
+from gui.settings_pane import DspSettingsPane
 from gui.wave_editor import WaveEditorWindow, WaveViewer
 from gui.widgets import FileRow, LabeledScale, Panel, Section, Segmented
 from SerializerMode import SerializerMode
@@ -133,6 +134,10 @@ class EncoderPanel(Panel):
         self._wave_viewer.pack(anchor="w")
         self._wave_editor = None
 
+        # ── advanced DSP (hideable) ─────────────────────────────────────────
+        self._dsp_pane = DspSettingsPane(body, settings, self._on_apply_dsp)
+        self._dsp_pane.grid(row=5, column=0, sticky="ew")
+
         self._update_kind_state()
         self._poll_position()
 
@@ -214,6 +219,19 @@ class EncoderPanel(Panel):
             messagebox.showerror("Wave Error", str(exc))
             return
         self._wave_viewer.set_params(params)
+
+    def _on_apply_dsp(self, values: dict) -> None:
+        self._engine.apply_dsp_settings(values)
+        # Wave params may have been reset to the (possibly re-sized) default;
+        # an open editor would keep pushing stale-length params, so close it.
+        if self._wave_editor is not None and self._wave_editor.winfo_exists():
+            self._wave_editor.destroy()
+        self._wave_editor = None
+        self._wave_viewer.set_params(self._engine.get_wave_params())
+        # chunk_size may have changed; reuse the strategy hook so a linked
+        # decoder panel refreshes its offset slider range.
+        if self._on_strategy_change is not None:
+            self._on_strategy_change(self._strategy_seg.get())
 
     def _update_kind_state(self) -> None:
         self._codec_seg.set_enabled(self._kind_seg.get() != "audio")

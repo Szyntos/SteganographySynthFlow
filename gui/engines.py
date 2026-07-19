@@ -276,6 +276,10 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
     def set_encoder_f0(self, f0: float) -> None:
         self._enc.set_f0(f0)
 
+    def apply_dsp_settings(self, values: dict) -> None:
+        with self._lock:
+            self._enc.apply_dsp_settings(values)
+
     def _callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
         _cb_start = time.perf_counter()
         try:
@@ -349,6 +353,10 @@ class DecoderEngine(_EngineBase, _DecoderSideMixin):
         with self._lock:
             self._dec.set_bits_per_symbol(bits)
 
+    def apply_dsp_settings(self, values: dict) -> None:
+        with self._lock:
+            self._dec.apply_dsp_settings(values)
+
     def _callback(self, indata: np.ndarray, outdata: np.ndarray, frames: int,
                   time_info, status) -> None:
         _cb_start = time.perf_counter()
@@ -418,6 +426,13 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
         with self._lock:
             self._enc.set_bits_per_symbol(bits)
             self._dec.set_bits_per_symbol(bits)
+
+    def apply_dsp_settings(self, values: dict) -> None:
+        # Both DSPs share one Settings object: mutate it once through the
+        # encoder facade, then give the decoder its structural rebuild.
+        with self._lock:
+            self._enc.apply_dsp_settings(values)
+            self._dec.rebuild_after_settings_change()
 
     def set_encoder_f0(self, f0: float) -> None:
         self._enc.set_f0(f0)

@@ -64,8 +64,16 @@ class DspSettings:
             raise ValueError("chunk_size must be positive and even")
         if self.base_chunk_size <= 0 or self.base_chunk_size % 2 != 0:
             raise ValueError("base_chunk_size must be positive and even")
+        if self.total_harmonics <= 0:
+            raise ValueError("total_harmonics must be positive")
+        if self.data_harmonics <= 0:
+            raise ValueError("data_harmonics must be positive")
+        if self.data_offset < 0:
+            raise ValueError("data_offset must be >= 0")
         if self.data_offset + self.data_harmonics > self.total_harmonics:
             raise ValueError("data_offset + data_harmonics exceeds total_harmonics")
+        if not (0 < self.phase_range <= math.pi):
+            raise ValueError("phase_range must be in (0, pi]")
         if self.fs_out <= 0:
             raise ValueError("fs_out must be positive")
         if not (0 < self.base_amplitude <= 1):
@@ -350,6 +358,19 @@ class Settings:
 
     def set_chunk_size(self, chunk_size: int) -> None:
         self.dsp.set_chunk_size(chunk_size)
+
+    def apply_values(self, values: dict) -> None:
+        """Set several (flat) setting names atomically: validate the result
+        and roll every field back if any assignment or check fails."""
+        old = {name: getattr(self, name) for name in values}
+        try:
+            for name, value in values.items():
+                setattr(self, name, value)
+            self.validate()
+        except Exception:
+            for name, value in old.items():
+                setattr(self, name, value)
+            raise
 
     def validate(self) -> None:
         for group in self._groups():

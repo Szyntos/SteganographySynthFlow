@@ -203,6 +203,31 @@ class DecoderDSP:
         self._dec_strategy.reconfigure()
         self._rebuild_decode_chain()
 
+    def apply_dsp_settings(self, values: dict) -> None:
+        """Atomically apply advanced DSP settings (chunk geometry, harmonic
+        layout, image shape) and rebuild everything that bakes them in."""
+        self.settings.apply_values(values)
+        self.rebuild_after_settings_change()
+
+    def rebuild_after_settings_change(self) -> None:
+        """Structural rebuild after settings were mutated externally (e.g. the
+        linked engine applied them through the encoder's facade)."""
+        apply_strategy_kind(self.settings, self._strategy_kind)
+        # Imported carrier scalars carry one entry per harmonic; drop them if
+        # the harmonic count no longer matches.
+        if (self._harmonic_scalars is not None
+                and len(self._harmonic_scalars) != self.settings.total_harmonics):
+            self._harmonic_scalars = None
+        self._image_codec = make_pixel_codec(self._codec_mode, self.settings)
+        self._binary_codec = make_pixel_codec(self._codec_mode, self.settings)
+        self._text_codec = make_pixel_codec(self._codec_mode, self.settings)
+        self._dec_strategy = self._decoding_cls()(self.settings)
+        self._dec_strategy.set_f0_resolver(self._resolve_window_f0)
+        self._dec_strategy.set_harmonic_scalars(self._harmonic_scalars)
+        self._tune_offset = 0
+        self._pending_skip = 0
+        self._rebuild_decode_chain()
+
     def set_resample_method(self, method: str) -> None:
         self._resample_method = method
         if self._decoder is not None:

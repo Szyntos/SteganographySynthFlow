@@ -189,6 +189,26 @@ class EncoderDSP:
         self._wave_generator = self._make_wave_generator()
         self._rebuild_all_strategies()
 
+    def apply_dsp_settings(self, values: dict) -> None:
+        """Atomically apply advanced DSP settings (chunk geometry, harmonic
+        layout, image shape) and rebuild everything that bakes them in."""
+        self.settings.apply_values(values)
+        self.rebuild_after_settings_change()
+
+    def rebuild_after_settings_change(self) -> None:
+        """Structural rebuild after settings were mutated externally (e.g. the
+        linked engine applied them through the other DSP's facade)."""
+        # Custom wave params carry one entry per harmonic; a harmonic-count
+        # change makes them meaningless, so fall back to the default shape.
+        if (self._wave_params is not None
+                and len(self._wave_params.amps) != self.settings.total_harmonics):
+            self._wave_params = None
+        apply_strategy_kind(self.settings, self._strategy_kind)
+        for kind in _CODEC_PAYLOAD_KINDS:
+            self._reload_codec_payload(kind, self._codec_mode)
+        self._wave_generator = self._make_wave_generator()
+        self._rebuild_all_strategies()
+
     def load_payload_file(self, file_path: str) -> None:
         if self._payload_kind == "image":
             self._image_path = file_path

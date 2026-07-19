@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 from PIL import Image as PILImage, ImageTk
 
+from gui.settings_pane import DspSettingsPane
 from gui.theme import Palette
 from gui.widgets import (LabeledScale, Panel, Section, Segmented,
                          make_text_well, set_text_well)
@@ -242,6 +243,11 @@ class DecoderPanel(Panel):
                                          command=self._on_save_data)
         self._save_data_btn.pack(side="left")
 
+        # ── advanced DSP (hideable; linked mode edits it on the encoder) ────
+        if not linked:
+            self._dsp_pane = DspSettingsPane(body, settings, self._on_apply_dsp)
+            self._dsp_pane.grid(row=row, column=0, sticky="ew"); row += 1
+
         self._current_kind = "audio"
         self._update_kind_state()
         self._update_f0_mode_state()
@@ -287,6 +293,14 @@ class DecoderPanel(Panel):
         except Exception as exc:
             messagebox.showerror("Bits per Symbol Error", str(exc))
             self._bits_var.set(str(self._settings.bits_per_symbol))
+
+    def _on_apply_dsp(self, values: dict) -> None:
+        prev_total = self._settings.total_harmonics
+        self._engine.apply_dsp_settings(values)
+        self.on_strategy_changed()
+        # A harmonic-count change drops any imported carrier scalars.
+        if self._settings.total_harmonics != prev_total:
+            self._wave_var.set("harmonic (default)")
 
     # ── notifications from the app (linked mode) ────────────────────────────
     def on_strategy_changed(self) -> None:
