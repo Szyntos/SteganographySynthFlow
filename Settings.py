@@ -158,6 +158,15 @@ class GuiSettings:
         self.bits_per_symbol_min: int = 1
         self.bits_per_symbol_max: int = 8
 
+        # MIDI file playback tempo knob (multiplier on the file's own tempo)
+        self.midi_tempo_scale_min: float = 0.25
+        self.midi_tempo_scale_max: float = 4.0
+        self.midi_tempo_scale_default: float = 1.0
+
+        # MIDI file playback transpose knob (semitones)
+        self.midi_transpose_min: int = -24
+        self.midi_transpose_max: int = 24
+
     def validate(self) -> None:
         if not (self.bits_per_symbol_min <= self.bits_per_symbol_max):
             raise ValueError("bits_per_symbol_min must be <= bits_per_symbol_max")
@@ -171,6 +180,12 @@ class GuiSettings:
             raise ValueError("volume_default_db must be within [volume_min_db, volume_max_db]")
         if not (self.piano_low_note < self.piano_high_note):
             raise ValueError("piano_low_note must be < piano_high_note")
+        if not (0 < self.midi_tempo_scale_min < self.midi_tempo_scale_max):
+            raise ValueError("midi_tempo_scale_min must be in (0, midi_tempo_scale_max)")
+        if not (self.midi_tempo_scale_min <= self.midi_tempo_scale_default <= self.midi_tempo_scale_max):
+            raise ValueError("midi_tempo_scale_default must be within its min/max")
+        if not (self.midi_transpose_min <= 0 <= self.midi_transpose_max):
+            raise ValueError("midi_transpose range must include 0")
 
 
 class EnergyGateSettings:

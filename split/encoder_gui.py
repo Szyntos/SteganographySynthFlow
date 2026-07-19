@@ -21,6 +21,7 @@ from audio_callback_diag import log_callback_event
 from EncoderDSP import EncoderDSP
 from KeyboardNoteInput import KeyboardNoteInput
 from MidiDeviceInput import MidiDeviceInput, list_midi_input_devices
+from MidiFilePlayer import MidiFilePlayer
 from NoteState import NoteState, midi_note_to_hz
 from PianoKeyboard import PianoKeyboard
 from SerializerMode import SerializerMode
@@ -58,6 +59,7 @@ class EncoderEngine:
 
         self._note_state = NoteState()
         self._midi_input = MidiDeviceInput(self._note_state)
+        self._midi_file_player = MidiFilePlayer(self._note_state)
         self._midi_enabled: bool = False
         self._keyboard_enabled: bool = False
 
@@ -125,6 +127,9 @@ class EncoderEngine:
     def set_keyboard_enabled(self, enabled: bool) -> None:
         self._keyboard_enabled = bool(enabled)
 
+    def get_midi_file_player(self) -> MidiFilePlayer:
+        return self._midi_file_player
+
     def get_active_note(self) -> Optional[int]:
         note = self._note_state.current_note_or(-1)
         return note if note >= 0 else None
@@ -137,7 +142,11 @@ class EncoderEngine:
         _cb_start = time.perf_counter()
         try:
             with self._lock:
-                gate_active = self._midi_enabled or self._keyboard_enabled
+                gate_active = (
+                    self._midi_enabled
+                    or self._keyboard_enabled
+                    or self._midi_file_player.is_playing()
+                )
                 note_held = True
                 if gate_active:
                     # Read the held-note stack once per audio block (chunk
@@ -184,6 +193,7 @@ class EncoderEngine:
             self._stream = None
 
     def shutdown_midi(self) -> None:
+        self._midi_file_player.stop()
         self._midi_input.stop()
         self._midi_enabled = False
 
@@ -373,9 +383,61 @@ class EncoderApp(tk.Tk):
             command=self._on_midi_toggle,
         ).grid(row=0, column=0, padx=(0, 8))
 
+        # ── midi file playback ───────────────────────────────────────────────
+        midi_file_frame = ttk.LabelFrame(right, text="MIDI File Playback", padding=8)
+        midi_file_frame.grid(row=1, column=0, sticky="ew", **pad)
+        midi_file_frame.columnconfigure(0, weight=1)
+
+        self._midi_file_var = tk.StringVar(value="(no file)")
+        ttk.Label(midi_file_frame, textvariable=self._midi_file_var, anchor="w").grid(
+            row=0, column=0, sticky="ew", padx=(0, 8)
+        )
+        ttk.Button(midi_file_frame, text="Browse...", command=self._on_pick_midi_file).grid(
+            row=0, column=1
+        )
+
+        self._midi_play_btn = ttk.Button(
+            midi_file_frame, text="▶  Play", command=self._on_midi_play_toggle, width=10,
+        )
+        self._midi_play_btn.grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        self._midi_loop_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            midi_file_frame, text="Loop", variable=self._midi_loop_var,
+            command=self._on_midi_loop_change,
+        ).grid(row=1, column=1, sticky="w", pady=(6, 0))
+
+        transpose_row = ttk.Frame(midi_file_frame)
+        transpose_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(transpose_row, text="Transpose (semitones)").grid(row=0, column=0, padx=(0, 8))
+        self._transpose_var = tk.StringVar(value="0")
+        transpose_spin = ttk.Spinbox(
+            transpose_row, textvariable=self._transpose_var,
+            from_=self._settings.midi_transpose_min, to=self._settings.midi_transpose_max,
+            increment=1, width=5, command=self._on_transpose_change,
+        )
+        transpose_spin.grid(row=0, column=1)
+        transpose_spin.bind("<Return>", self._on_transpose_change)
+        transpose_spin.bind("<FocusOut>", self._on_transpose_change)
+
+        ttk.Label(midi_file_frame, text="Tempo").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self._tempo_label = ttk.Label(
+            midi_file_frame, text=f"×{self._settings.midi_tempo_scale_default:.2f}", width=6, anchor="e",
+        )
+        self._tempo_label.grid(row=4, column=1, padx=(6, 0))
+
+        self._tempo_slider = ttk.Scale(
+            midi_file_frame,
+            from_=self._settings.midi_tempo_scale_min, to=self._settings.midi_tempo_scale_max,
+            orient="horizontal", length=self._settings.slider_length_px,
+            command=self._on_tempo_change,
+        )
+        self._tempo_slider.set(self._settings.midi_tempo_scale_default)
+        self._tempo_slider.grid(row=4, column=0, sticky="w")
+
         # ── keyboard control + on-screen piano ───────────────────────────────
         kbd_frame = ttk.LabelFrame(right, text="Keyboard Control (QWERTY piano)", padding=8)
-        kbd_frame.grid(row=1, column=0, sticky="ew", **pad)
+        kbd_frame.grid(row=2, column=0, sticky="ew", **pad)
 
         self._keyboard_enabled_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -390,7 +452,7 @@ class EncoderApp(tk.Tk):
 
         # ── pitch ─────────────────────────────────────────────────────────────
         pitch_frame = ttk.LabelFrame(right, text="Pitch (Hz)", padding=8)
-        pitch_frame.grid(row=2, column=0, sticky="ew", **pad)
+        pitch_frame.grid(row=3, column=0, sticky="ew", **pad)
 
         self._pitch_label = ttk.Label(
             pitch_frame, text=f"{self._settings.pitch_default_hz:.0f} Hz", width=7, anchor="e",
@@ -563,13 +625,67 @@ class EncoderApp(tk.Tk):
         self._engine.set_keyboard_enabled(enabled)
         self._update_note_control_visibility()
 
+    def _on_pick_midi_file(self) -> None:
+        file_path = filedialog.askopenfilename(
+            title="Select MIDI file",
+            filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            self._engine.get_midi_file_player().load(file_path)
+        except Exception as exc:
+            messagebox.showerror("MIDI File Error", str(exc))
+            return
+        self._midi_file_var.set(os.path.basename(file_path))
+
+    def _on_midi_play_toggle(self) -> None:
+        player = self._engine.get_midi_file_player()
+        if player.is_playing():
+            player.stop()
+        else:
+            try:
+                player.start()
+            except Exception as exc:
+                messagebox.showerror("MIDI File Error", str(exc))
+                return
+        self._update_note_control_visibility()
+
+    def _on_tempo_change(self, value: str) -> None:
+        scale = float(value)
+        self._engine.get_midi_file_player().set_tempo_scale(scale)
+        self._tempo_label.configure(text=f"×{scale:.2f}")
+
+    def _on_midi_loop_change(self) -> None:
+        self._engine.get_midi_file_player().set_loop(self._midi_loop_var.get())
+
+    def _on_transpose_change(self, _event=None) -> None:
+        player = self._engine.get_midi_file_player()
+        try:
+            semitones = int(self._transpose_var.get())
+        except ValueError:
+            self._transpose_var.set(str(player.get_transpose()))
+            return
+        semitones = min(max(semitones, self._settings.midi_transpose_min),
+                        self._settings.midi_transpose_max)
+        self._transpose_var.set(str(semitones))
+        player.set_transpose(semitones)
+
     def _update_note_control_visibility(self) -> None:
-        note_control_active = self._midi_enabled_var.get() or self._keyboard_enabled_var.get()
+        playing = self._engine.get_midi_file_player().is_playing()
+        note_control_active = (
+            self._midi_enabled_var.get() or self._keyboard_enabled_var.get() or playing
+        )
         self._midi_device_combo.configure(state="disabled" if self._midi_enabled_var.get() else "readonly")
         self._pitch_slider.configure(state="disabled" if note_control_active else "normal")
+        self._midi_play_btn.configure(text="⏹  Stop" if playing else "▶  Play")
 
     def _poll_note_control(self) -> None:
-        if self._midi_enabled_var.get() or self._keyboard_enabled_var.get():
+        playing = self._engine.get_midi_file_player().is_playing()
+        # Playback ends on its own when the file runs out, so the Play button
+        # and pitch-slider state have to be re-derived on every poll.
+        self._update_note_control_visibility()
+        if self._midi_enabled_var.get() or self._keyboard_enabled_var.get() or playing:
             f0 = self._engine.get_f0()
             self._syncing_pitch_ui = True
             try:

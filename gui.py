@@ -14,6 +14,9 @@ except ImportError:
 
 from DecoderDSP import DecoderDSP
 from EncoderDSP import EncoderDSP
+from MidiFilePlayer import MidiFilePlayer
+from NoteState import NoteState, midi_note_to_hz
+from PianoKeyboard import PianoKeyboard
 from SerializerMode import SerializerMode
 from Settings import Settings
 from Sink import SinkBehaviour
@@ -38,6 +41,16 @@ class AudioEngine:
         self._enc = EncoderDSP(settings)
         self._dec = DecoderDSP(settings)
         self.set_f0(settings.pitch_default_hz)
+
+        self._note_state = NoteState()
+        self._midi_file_player = MidiFilePlayer(self._note_state)
+
+    def get_midi_file_player(self) -> MidiFilePlayer:
+        return self._midi_file_player
+
+    def get_active_note(self) -> Optional[int]:
+        note = self._note_state.current_note_or(-1)
+        return note if note >= 0 else None
 
     def set_f0_estimator_mode(self, mode: str) -> None:
         with self._lock:
@@ -174,8 +187,25 @@ class AudioEngine:
 
     def _callback(self, outdata: np.ndarray, frames: int, time, status) -> None:
         with self._lock:
+            gate_active = self._midi_file_player.is_playing()
+            note_held = True
+            if gate_active:
+                # Same gating contract as the split encoder GUI: pitch follows
+                # the held note (both DSPs, so a manual-f0 decoder stays in
+                # tune), the encoder keeps running through rests, and silence
+                # is applied to the samples — so the decoder hears the same
+                # gaps a real listener would.
+                midi_note = self._note_state.current_note_or(-1)
+                note_held = midi_note >= 0
+                if note_held:
+                    f0 = midi_note_to_hz(midi_note)
+                    self._enc.set_f0(f0)
+                    self._dec.set_f0(f0)
+
             enc_chunk = self._enc.process(frames)
-            enc_samples = enc_chunk.get_samples()
+            enc_samples = np.array(enc_chunk.get_samples(), dtype=np.float32)
+            if gate_active and not note_held:
+                enc_samples[:] = 0.0
 
             dec_samples = self._dec.process_chunk(enc_samples, frames)
 
@@ -242,6 +272,7 @@ class App(tk.Tk):
         self._poll_image()
         self._poll_decoded_text()
         self._poll_estimated_f0()
+        self._poll_midi_playback()
 
     def _build_ui(self) -> None:
         pad = {"padx": 16, "pady": 6}
@@ -531,6 +562,64 @@ class App(tk.Tk):
         )
         self._tune_slider.set(0)
         self._tune_slider.grid(row=2, column=1)
+
+        # ── midi file playback ───────────────────────────────────────────────
+        midi_file_frame = ttk.LabelFrame(right, text="MIDI File Playback", padding=8)
+        midi_file_frame.grid(row=5, column=0, sticky="ew", **pad)
+        midi_file_frame.columnconfigure(0, weight=1)
+
+        self._midi_file_var = tk.StringVar(value="(no file)")
+        ttk.Label(midi_file_frame, textvariable=self._midi_file_var, anchor="w").grid(
+            row=0, column=0, sticky="ew", padx=(0, 8)
+        )
+        ttk.Button(midi_file_frame, text="Browse...", command=self._on_pick_midi_file).grid(
+            row=0, column=1
+        )
+
+        self._midi_play_btn = ttk.Button(
+            midi_file_frame, text="▶  Play", command=self._on_midi_play_toggle, width=10,
+        )
+        self._midi_play_btn.grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        self._midi_loop_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            midi_file_frame, text="Loop", variable=self._midi_loop_var,
+            command=self._on_midi_loop_change,
+        ).grid(row=1, column=1, sticky="w", pady=(6, 0))
+
+        transpose_row = ttk.Frame(midi_file_frame)
+        transpose_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(transpose_row, text="Transpose (semitones)").grid(row=0, column=0, padx=(0, 8))
+        self._transpose_var = tk.StringVar(value="0")
+        transpose_spin = ttk.Spinbox(
+            transpose_row, textvariable=self._transpose_var,
+            from_=self._settings.midi_transpose_min, to=self._settings.midi_transpose_max,
+            increment=1, width=5, command=self._on_transpose_change,
+        )
+        transpose_spin.grid(row=0, column=1)
+        transpose_spin.bind("<Return>", self._on_transpose_change)
+        transpose_spin.bind("<FocusOut>", self._on_transpose_change)
+
+        ttk.Label(midi_file_frame, text="Tempo").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self._tempo_label = ttk.Label(
+            midi_file_frame, text=f"×{self._settings.midi_tempo_scale_default:.2f}", width=6, anchor="e",
+        )
+        self._tempo_label.grid(row=4, column=1, padx=(6, 0))
+
+        self._tempo_slider = ttk.Scale(
+            midi_file_frame,
+            from_=self._settings.midi_tempo_scale_min, to=self._settings.midi_tempo_scale_max,
+            orient="horizontal", length=self._settings.slider_length_px,
+            command=self._on_tempo_change,
+        )
+        self._tempo_slider.set(self._settings.midi_tempo_scale_default)
+        self._tempo_slider.grid(row=4, column=0, sticky="w")
+
+        self._piano = PianoKeyboard(
+            midi_file_frame,
+            low_note=self._settings.piano_low_note, high_note=self._settings.piano_high_note,
+        )
+        self._piano.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         self._update_kind_dependent_visibility()
         self._update_decoder_pitch_state()
@@ -870,7 +959,74 @@ class App(tk.Tk):
             self._signal_var.set("")
         self.after(self._settings.gui_poll_interval_ms, self._poll_estimated_f0)
 
+    def _on_pick_midi_file(self) -> None:
+        file_path = filedialog.askopenfilename(
+            title="Select MIDI file",
+            filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            self._engine.get_midi_file_player().load(file_path)
+        except Exception as exc:
+            messagebox.showerror("MIDI File Error", str(exc))
+            return
+        self._midi_file_var.set(os.path.basename(file_path))
+
+    def _on_midi_play_toggle(self) -> None:
+        player = self._engine.get_midi_file_player()
+        if player.is_playing():
+            player.stop()
+        else:
+            try:
+                player.start()
+            except Exception as exc:
+                messagebox.showerror("MIDI File Error", str(exc))
+                return
+        self._update_midi_playback_ui()
+
+    def _on_tempo_change(self, value: str) -> None:
+        if not self._ui_ready:
+            return
+        scale = float(value)
+        self._engine.get_midi_file_player().set_tempo_scale(scale)
+        self._tempo_label.configure(text=f"×{scale:.2f}")
+
+    def _on_midi_loop_change(self) -> None:
+        self._engine.get_midi_file_player().set_loop(self._midi_loop_var.get())
+
+    def _on_transpose_change(self, _event=None) -> None:
+        player = self._engine.get_midi_file_player()
+        try:
+            semitones = int(self._transpose_var.get())
+        except ValueError:
+            self._transpose_var.set(str(player.get_transpose()))
+            return
+        semitones = min(max(semitones, self._settings.midi_transpose_min),
+                        self._settings.midi_transpose_max)
+        self._transpose_var.set(str(semitones))
+        player.set_transpose(semitones)
+
+    def _update_midi_playback_ui(self) -> None:
+        playing = self._engine.get_midi_file_player().is_playing()
+        self._midi_play_btn.configure(text="⏹  Stop" if playing else "▶  Play")
+        # During playback the notes drive the encoder pitch, so the manual
+        # slider is taken out of play rather than fighting the file.
+        self._pitch_slider.configure(state="disabled" if playing else "normal")
+
+    def _poll_midi_playback(self) -> None:
+        # Playback ends on its own when the file runs out, so the Play button
+        # and pitch-slider state have to be re-derived on every poll.
+        self._update_midi_playback_ui()
+        self._piano.set_active_note(self._engine.get_active_note())
+        if self._engine.get_midi_file_player().is_playing():
+            note = self._engine.get_active_note()
+            if note is not None:
+                self._pitch_label.configure(text=f"{midi_note_to_hz(note):.2f} Hz")
+        self.after(self._settings.gui_note_poll_interval_ms, self._poll_midi_playback)
+
     def _on_close(self) -> None:
+        self._engine.get_midi_file_player().stop()
         self._stop()
         self.destroy()
 
