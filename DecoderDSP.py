@@ -68,10 +68,7 @@ class DecoderDSP:
         self._decoder: Optional[Decoder] = None
         self._rebuild_decode_chain()
 
-        self._energy_gate = EnergyGate(EnergyGateConfig(
-            ema_alpha=self.settings.energy_gate_ema_alpha, abs_floor=self.settings.energy_gate_abs_floor,
-            drop_ratio=self.settings.energy_gate_drop_ratio,
-        ))
+        self._energy_gate = self._build_energy_gate()
         self._drop_tolerance = DropTolerance(DropToleranceConfig(
             tolerance_chunks=self.settings.drop_tolerance_chunks,
         ))
@@ -209,10 +206,18 @@ class DecoderDSP:
         self.settings.apply_values(values)
         self.rebuild_after_settings_change()
 
+    def _build_energy_gate(self) -> EnergyGate:
+        return EnergyGate(EnergyGateConfig(
+            ema_alpha=self.settings.energy_gate_ema_alpha,
+            abs_floor=self.settings.energy_gate_abs_floor,
+            drop_ratio=self.settings.energy_gate_drop_ratio,
+        ))
+
     def rebuild_after_settings_change(self) -> None:
         """Structural rebuild after settings were mutated externally (e.g. the
         linked engine applied them through the encoder's facade)."""
         apply_strategy_kind(self.settings, self._strategy_kind)
+        self._energy_gate = self._build_energy_gate()
         # Imported carrier scalars carry one entry per harmonic; drop them if
         # the harmonic count no longer matches.
         if (self._harmonic_scalars is not None

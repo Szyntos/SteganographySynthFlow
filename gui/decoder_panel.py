@@ -80,7 +80,8 @@ class DecoderPanel(Panel):
             ttk.Label(dev.content, text="Input", style="Dim.TLabel", width=9).grid(
                 row=0, column=0, sticky="w", pady=2)
             in_names = ["(default)"] + [n for _, n in input_devices]
-            self._in_var = tk.StringVar(value=in_names[0])
+            default_in = next((n for n in in_names if "cable" in n.lower()), in_names[0])
+            self._in_var = tk.StringVar(value=default_in)
             in_combo = ttk.Combobox(dev.content, textvariable=self._in_var,
                                     values=in_names, state="readonly")
             in_combo.grid(row=0, column=1, sticky="ew", pady=2)

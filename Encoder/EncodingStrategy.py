@@ -22,6 +22,8 @@ class EncodingStrategy(ABC):
         self._clock_position = 0
         self._current_row: SymbolRow | None = None
         self._layout: SplitLayout | None = None
+        self._synth_voice = None
+        self._amp_gains = None
         self.reconfigure()
 
     def reconfigure(self) -> None:
@@ -41,6 +43,9 @@ class EncodingStrategy(ABC):
 
     def set_additive_wave_generator(self, additive_wave_generator: AdditiveWaveGenerator):
         self._additive_wave_generator = additive_wave_generator
+
+    def set_synth_voice(self, synth_voice) -> None:
+        self._synth_voice = synth_voice
 
     def set_f0(self, f0: float):
         # Deferred to the next chunk boundary: a pitch step inside a chunk
@@ -70,6 +75,15 @@ class EncodingStrategy(ABC):
                 if self._pending_f0 is not None:
                     self._f0 = self._pending_f0
                     self._pending_f0 = None
+                if self._synth_voice is not None:
+                    # Envelope/filter gains advance and latch only here, so
+                    # they stay constant across the whole chunk (a mid-chunk
+                    # gain move leaks energy between the decoder's DFT bins).
+                    self._amp_gains = self._synth_voice.next_chunk_gains(
+                        self._f0,
+                        self._additive_wave_generator.get_omegas(),
+                        self._internal_clock,
+                    )
 
             segment_len = min(remaining, self._internal_clock - self._clock_position)
             segment_envelope = self._layout.envelope[self._clock_position:self._clock_position + segment_len]
@@ -78,6 +92,7 @@ class EncodingStrategy(ABC):
                 segment_len,
                 phase_offsets=self._get_phase_offsets(),
                 phase_envelope=segment_envelope,
+                amp_gains=self._amp_gains,
             )
 
             result.extend(block.tolist())

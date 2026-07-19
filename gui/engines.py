@@ -12,6 +12,7 @@ Three flavours, matching the rack's module combinations:
                   output stream, shared transmission parameters kept in sync
 """
 
+import collections
 import threading
 import time
 from typing import Callable, List, Optional, Tuple
@@ -133,6 +134,29 @@ class _EncoderSideMixin:
         with self._lock:
             self._enc.set_wave_params(params)
 
+    def get_filtered_wave_params(self) -> WaveParams:
+        with self._lock:
+            return self._enc.get_filtered_wave_params()
+
+    def _drive_voice(self) -> bool:
+        """Run inside the audio callback (lock held): forward the note gate to
+        the synth voice as envelope edges. Returns True while a note is held.
+        Envelope on/off replaces the old hard output muting — release tails
+        ring out after note-off, classic monosynth style."""
+        gate_active = self._notes.gate_active()
+        self._enc.set_voice_enabled(gate_active)
+        midi_note = self._notes.note_state.current_note_or(-1) if gate_active else -1
+        note_held = midi_note >= 0
+        if gate_active and midi_note != self._last_gate_note:
+            # Retrigger on every key change — legato included: each new key
+            # resets both envelopes and restarts the attack from zero.
+            if note_held:
+                self._enc.note_on()
+            else:
+                self._enc.note_off()
+        self._last_gate_note = midi_note if gate_active else None
+        return note_held
+
     # ── note control ────────────────────────────────────────────────────────
     def list_midi_devices(self) -> List[str]:
         return list_midi_input_devices()
@@ -253,9 +277,20 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
     def __init__(self, settings: Settings):
         super().__init__(settings)
         self._output_device: Optional[int] = None
+        self._output_device2: Optional[int] = None
+        self._output2_enabled: bool = False
+        self._stream2 = None
+        self._secondary_buffer = collections.deque(maxlen=4)
         self._enc = EncoderDSP(settings)
         self._enc.set_f0(settings.pitch_default_hz)
         self._notes = _NoteControl()
+        self._last_gate_note: Optional[int] = None
+
+    def set_output_device2(self, device: Optional[int]) -> None:
+        self._output_device2 = device
+
+    def set_output2_enabled(self, enabled: bool) -> None:
+        self._output2_enabled = bool(enabled)
 
     def set_strategy_kind(self, kind: str) -> None:
         with self._lock:
@@ -284,26 +319,34 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
         _cb_start = time.perf_counter()
         try:
             with self._lock:
-                gate_active = self._notes.gate_active()
-                note_held = True
-                if gate_active:
-                    # Pitch follows the held note; the encoder keeps advancing
-                    # through rests and silence is applied only to the output
-                    # samples, so payload position and phases stay continuous.
-                    midi_note = self._notes.note_state.current_note_or(-1)
-                    note_held = midi_note >= 0
-                    if note_held:
-                        self._enc.set_f0(midi_note_to_hz(midi_note))
+                # Pitch follows the held note; the encoder keeps advancing
+                # through rests (the amp envelope shapes gaps now), so payload
+                # position and phases stay continuous.
+                note_held = self._drive_voice()
+                if note_held:
+                    self._enc.set_f0(
+                        midi_note_to_hz(self._notes.note_state.current_note_or(-1)))
 
                 enc_chunk = self._enc.process(frames)
                 arr = np.array(enc_chunk.get_samples(), dtype=np.float32) * self._volume
-                if gate_active and not note_held:
-                    arr[:] = 0.0
                 outdata[:, 0] = arr
+                if self._output2_enabled:
+                    self._secondary_buffer.append(arr.copy())
         finally:
             duration = time.perf_counter() - _cb_start
             budget = frames / float(self._settings.fs_out)
             log_callback_event("encoder", status, duration, budget)
+
+    def _callback2(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
+        # Mirrors whatever the primary stream just produced; on underrun
+        # (secondary polled faster than the primary fills it) plays silence
+        # rather than blocking the audio thread.
+        if self._secondary_buffer:
+            block = self._secondary_buffer.popleft()
+            if len(block) == frames:
+                outdata[:, 0] = block
+                return
+        outdata.fill(0)
 
     def start(self) -> None:
         _require_sounddevice()
@@ -316,6 +359,24 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
             callback=self._callback,
         )
         self._stream.start()
+        if self._output2_enabled:
+            self._secondary_buffer.clear()
+            self._stream2 = sd.OutputStream(
+                samplerate=self._settings.fs_out,
+                blocksize=self._settings.audio_driver_polling_rate,
+                channels=1,
+                dtype="float32",
+                device=self._output_device2,
+                callback=self._callback2,
+            )
+            self._stream2.start()
+
+    def stop(self) -> None:
+        super().stop()
+        if self._stream2 is not None:
+            self._stream2.stop()
+            self._stream2.close()
+            self._stream2 = None
 
     def shutdown(self) -> None:
         self._notes.shutdown()
@@ -394,17 +455,26 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
         super().__init__(settings)
         self._output_device: Optional[int] = None
         self._source: str = "encoder"
+        self._enc_gain: float = 1.0
+        self._dec_gain: float = 1.0
         self._enc = EncoderDSP(settings)
         self._dec = DecoderDSP(settings)
         self._enc.set_f0(settings.pitch_default_hz)
         self._dec.set_f0(settings.pitch_default_hz)
         self._notes = _NoteControl()
+        self._last_gate_note: Optional[int] = None
 
     def set_source(self, source: str) -> None:
         self._source = source
 
     def get_source(self) -> str:
         return self._source
+
+    def set_enc_gain(self, gain: float) -> None:
+        self._enc_gain = float(gain)
+
+    def set_dec_gain(self, gain: float) -> None:
+        self._dec_gain = float(gain)
 
     # ── shared transmission parameters (both DSPs) ─────────────────────────
     def set_strategy_kind(self, kind: str) -> None:
@@ -447,27 +517,31 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
         _cb_start = time.perf_counter()
         try:
             with self._lock:
-                gate_active = self._notes.gate_active()
-                note_held = True
-                if gate_active:
-                    # Pitch follows the held note on both DSPs (so a manual-f0
-                    # decoder stays in tune); silence is applied to the samples
-                    # so the decoder hears the same gaps a real listener would.
-                    midi_note = self._notes.note_state.current_note_or(-1)
-                    note_held = midi_note >= 0
-                    if note_held:
-                        f0 = midi_note_to_hz(midi_note)
-                        self._enc.set_f0(f0)
-                        self._dec.set_f0(f0)
+                # Pitch follows the held note on both DSPs (so a manual-f0
+                # decoder stays in tune); rests are shaped by the amp envelope
+                # in the encoded samples, so the decoder hears the same
+                # release tails and gaps a real listener would.
+                note_held = self._drive_voice()
+                if note_held:
+                    f0 = midi_note_to_hz(self._notes.note_state.current_note_or(-1))
+                    self._enc.set_f0(f0)
+                    self._dec.set_f0(f0)
 
                 enc_chunk = self._enc.process(frames)
                 enc_samples = np.array(enc_chunk.get_samples(), dtype=np.float32)
-                if gate_active and not note_held:
-                    enc_samples[:] = 0.0
 
                 dec_samples = self._dec.process_chunk(enc_samples, frames)
 
-                samples = enc_samples if self._source == "encoder" else dec_samples
+                enc_out = enc_samples * self._enc_gain
+                dec_out = np.array(dec_samples, dtype=np.float32) * self._dec_gain
+                if self._source == "both":
+                    # Averaged, not summed, so hearing both at once doesn't
+                    # clip relative to either soloed source.
+                    samples = (enc_out + dec_out) * 0.5
+                elif self._source == "encoder":
+                    samples = enc_out
+                else:
+                    samples = dec_out
                 outdata[:, 0] = np.array(samples, dtype=np.float32) * self._volume
         finally:
             duration = time.perf_counter() - _cb_start

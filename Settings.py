@@ -199,11 +199,22 @@ class GuiSettings:
 class EnergyGateSettings:
     def __init__(self):
         self.energy_gate_ema_alpha: float = 0.05
-        self.energy_gate_abs_floor: float = 1e-6
-        self.energy_gate_drop_ratio: float = 0.25
+        self.energy_gate_abs_floor: float = 3e-05
+        # A fast filter/amp envelope (short attack/decay relative to the EMA's
+        # ~ chunk_period/ema_alpha time constant) can legitimately swing chunk
+        # RMS down faster than the EMA can track, even though every harmonic
+        # is still above its per-harmonic floor (SynthVoice's envelope_min_gain
+        # / filter_per_harmonic_min_gain). 0.25 was tripping on those dips —
+        # lowered so intentional filter sweeps aren't mistaken for a dropout.
+        self.energy_gate_drop_ratio: float = 0.12
 
     def validate(self) -> None:
-        pass
+        if not (0.0 < self.energy_gate_ema_alpha <= 1.0):
+            raise ValueError("energy_gate_ema_alpha must be in (0, 1]")
+        if self.energy_gate_abs_floor < 0.0:
+            raise ValueError("energy_gate_abs_floor must be >= 0")
+        if not (0.0 < self.energy_gate_drop_ratio < 1.0):
+            raise ValueError("energy_gate_drop_ratio must be in (0, 1)")
 
 
 class DropToleranceSettings:
@@ -264,6 +275,67 @@ class PixelCodecSettings:
         pass
 
 
+class SynthVoiceSettings:
+    """Amp/filter envelope and filter parameters for the monophonic synth
+    voice (SynthVoice.py). All gain-only; floors keep decode alive."""
+
+    def __init__(self):
+        # amp envelope
+        self.amp_env_attack_s: float = 0.01
+        self.amp_env_decay_s: float = 0.1
+        self.amp_env_sustain: float = 0.8
+        self.amp_env_release_s: float = 0.3
+        # floor for the held (attack/decay/sustain) part of the amp envelope
+        # so a low sustain can't starve the decoder's EnergyGate
+        self.envelope_min_gain: float = 0.1
+
+        # filter (default: 2-pole resonant LPF)
+        self.filter_cutoff_hz: float = 20_000.0
+        self.filter_resonance_q: float = 0.707
+        self.filter_env_amount: float = 0.0        # bipolar, [-1, 1]
+        self.filter_min_cutoff_hz: float = 10.0
+        self.filter_resonance_gain_cap: float = 4.0
+        # per-harmonic floor: the filter attenuates but never mutes, so no
+        # data harmonic can fall under the decoder's magnitude threshold
+        self.filter_per_harmonic_min_gain: float = 0.05
+
+        # filter envelope
+        self.filter_env_attack_s: float = 0.01
+        self.filter_env_decay_s: float = 0.15
+        self.filter_env_sustain: float = 0.5
+        self.filter_env_release_s: float = 0.3
+
+        # GUI slider range for all envelope times
+        self.env_time_max_s: float = 5.0
+
+    def validate(self) -> None:
+        for name in ("amp_env_attack_s", "amp_env_decay_s", "amp_env_release_s",
+                     "filter_env_attack_s", "filter_env_decay_s",
+                     "filter_env_release_s"):
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"{name} must be >= 0")
+        if not (0.0 <= self.amp_env_sustain <= 1.0):
+            raise ValueError("amp_env_sustain must be in [0, 1]")
+        if not (0.0 <= self.filter_env_sustain <= 1.0):
+            raise ValueError("filter_env_sustain must be in [0, 1]")
+        if not (0.0 < self.envelope_min_gain <= 1.0):
+            raise ValueError("envelope_min_gain must be in (0, 1]")
+        if not (0.0 < self.filter_per_harmonic_min_gain <= 1.0):
+            raise ValueError("filter_per_harmonic_min_gain must be in (0, 1]")
+        if self.filter_resonance_q <= 0.0:
+            raise ValueError("filter_resonance_q must be positive")
+        if self.filter_resonance_gain_cap < 1.0:
+            raise ValueError("filter_resonance_gain_cap must be >= 1")
+        if not (-1.0 <= self.filter_env_amount <= 1.0):
+            raise ValueError("filter_env_amount must be in [-1, 1]")
+        if self.filter_min_cutoff_hz <= 0.0:
+            raise ValueError("filter_min_cutoff_hz must be positive")
+        if self.filter_cutoff_hz < self.filter_min_cutoff_hz:
+            raise ValueError("filter_cutoff_hz must be >= filter_min_cutoff_hz")
+        if self.env_time_max_s <= 0.0:
+            raise ValueError("env_time_max_s must be positive")
+
+
 class Settings:
     """Composition root over cohesive DSP/GUI/sink/etc. sub-configs.
 
@@ -286,13 +358,14 @@ class Settings:
         self.sink = SinkSettings()
         self.temporal_merge = TemporalMergeSettings()
         self.pixel_codec = PixelCodecSettings()
+        self.synth_voice = SynthVoiceSettings()
         self._check_group_name_uniqueness()
 
     def _groups(self):
         return (
             self.dsp, self.audio_io, self.decoder_batching, self.sync, self.payload,
             self.gui, self.energy_gate, self.drop_tolerance, self.f0_estimator,
-            self.sink, self.temporal_merge, self.pixel_codec,
+            self.sink, self.temporal_merge, self.pixel_codec, self.synth_voice,
         )
 
     def _check_group_name_uniqueness(self) -> None:
@@ -350,7 +423,7 @@ class Settings:
     _OWN_ATTRS = frozenset({
         "dsp", "audio_io", "decoder_batching", "sync", "payload", "gui",
         "energy_gate", "drop_tolerance", "f0_estimator", "sink",
-        "temporal_merge", "pixel_codec",
+        "temporal_merge", "pixel_codec", "synth_voice",
     })
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:

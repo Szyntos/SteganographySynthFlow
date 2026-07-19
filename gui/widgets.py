@@ -158,6 +158,111 @@ class LabeledScale(ttk.Frame):
         self._value_label.configure(text=text)
 
 
+class VBarBank(tk.Canvas):
+    """Bank of vertical fill-bar sliders in the wave-editor style (BarRow):
+    one column per parameter, drag to set the fill. The letter label and the
+    value readout are drawn on the canvas at fixed column centres, so long
+    readouts can never disturb the horizontal spacing.
+
+    Values are normalized 0..1; the caller maps them to real units in
+    ``on_change`` and formats them with ``fmt``.
+    """
+
+    _LABEL_H = 14
+    _READOUT_H = 14
+
+    def __init__(self, parent, specs: Sequence[Tuple[str, float,
+                                                     Callable[[float], str],
+                                                     Callable[[float], None]]],
+                 col_w: int = 44, bar_h: int = 72, fill: str = Palette.ACCENT):
+        """specs: (label, init_norm, fmt, on_change) per bar."""
+        n = len(specs)
+        height = bar_h + self._LABEL_H + self._READOUT_H
+        super().__init__(parent, width=n * col_w, height=height,
+                         bg=Palette.INSET, highlightthickness=0)
+        self._specs = list(specs)
+        self._col_w = col_w
+        self._bar_h = bar_h
+        self._values = [0.0] * n
+        self._rects = []
+        self._readouts = []
+        for i, (label, init, fmt, _cmd) in enumerate(self._specs):
+            x0 = i * col_w
+            cx = x0 + col_w // 2
+            self.create_rectangle(x0 + 4, 0, x0 + col_w - 4, bar_h,
+                                  outline=Palette.PANEL_EDGE, width=1)
+            self._rects.append(self.create_rectangle(
+                x0 + 6, bar_h, x0 + col_w - 5, bar_h, outline="", fill=fill))
+            self.create_text(cx, bar_h + self._LABEL_H // 2 + 2, text=label,
+                             fill=Palette.DIM, font=Palette.FONT_SMALL)
+            self._readouts.append(self.create_text(
+                cx, bar_h + self._LABEL_H + self._READOUT_H // 2 + 2,
+                text="", fill=Palette.TEXT, font=Palette.FONT_SMALL))
+            self._set_norm(i, init)
+        self.bind("<ButtonPress-1>", self._on_drag)
+        self.bind("<B1-Motion>", self._on_drag)
+
+    def _set_norm(self, idx: int, value: float) -> None:
+        value = min(1.0, max(0.0, value))
+        self._values[idx] = value
+        x0 = idx * self._col_w
+        top = self._bar_h - value * (self._bar_h - 2)
+        self.coords(self._rects[idx], x0 + 6, top, x0 + self._col_w - 5,
+                    self._bar_h)
+        self.itemconfigure(self._readouts[idx], text=self._specs[idx][2](value))
+
+    def _on_drag(self, event) -> None:
+        idx = event.x // self._col_w
+        if not (0 <= idx < len(self._specs)):
+            return
+        value = min(1.0, max(0.0, 1.0 - event.y / self._bar_h))
+        self._set_norm(idx, value)
+        self._specs[idx][3](value)
+
+
+class BipolarBar(tk.Canvas):
+    """Horizontal bipolar fill bar: the fill grows from the centre to the
+    left (negative) or right (positive). Value is -1..1."""
+
+    def __init__(self, parent, init: float, fmt: Callable[[float], str],
+                 on_change: Callable[[float], None],
+                 width: int = 160, height: int = 18,
+                 fill: str = Palette.ACCENT):
+        super().__init__(parent, width=width, height=height, bg=Palette.INSET,
+                         highlightthickness=0)
+        self._bp_w = width
+        self._bp_h = height
+        self._fmt = fmt
+        self._on_change = on_change
+        self._readout_cb: Optional[Callable[[str], None]] = None
+        self.create_rectangle(1, 1, width - 1, height - 1,
+                              outline=Palette.PANEL_EDGE, width=1)
+        self._rect = self.create_rectangle(width // 2, 2, width // 2,
+                                           height - 2, outline="", fill=fill)
+        self.create_line(width // 2, 1, width // 2, height - 1,
+                         fill=Palette.DIM)
+        self.set_value(init)
+        self.bind("<ButtonPress-1>", self._on_drag)
+        self.bind("<B1-Motion>", self._on_drag)
+
+    def set_readout(self, cb: Callable[[str], None]) -> None:
+        self._readout_cb = cb
+        cb(self._fmt(self._value))
+
+    def set_value(self, value: float) -> None:
+        self._value = min(1.0, max(-1.0, value))
+        mid = self._bp_w / 2
+        end = mid + self._value * (mid - 2)
+        self.coords(self._rect, min(mid, end), 2, max(mid, end), self._bp_h - 2)
+        if self._readout_cb is not None:
+            self._readout_cb(self._fmt(self._value))
+
+    def _on_drag(self, event) -> None:
+        mid = self._bp_w / 2
+        self.set_value((event.x - mid) / (mid - 2))
+        self._on_change(self._value)
+
+
 class FileRow(ttk.Frame):
     """Filename readout + Browse button."""
 

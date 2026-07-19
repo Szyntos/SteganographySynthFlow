@@ -81,6 +81,7 @@ class AdditiveWaveGenerator:
         phase_offsets: Optional[List[float]] = None,
         amp_offsets: Optional[List[float]] = None,
         phase_envelope: Optional[np.ndarray] = None,
+        amp_gains: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         self._validate_state()
 
@@ -88,6 +89,8 @@ class AdditiveWaveGenerator:
             raise ValueError("phase_offsets length exceeds number of harmonics")
         if amp_offsets is not None and len(amp_offsets) > len(self._omegas):
             raise ValueError("amp_offsets length exceeds number of harmonics")
+        if amp_gains is not None and len(amp_gains) > len(self._omegas):
+            raise ValueError("amp_gains length exceeds number of harmonics")
         if phase_envelope is not None and len(phase_envelope) != n:
             raise ValueError("phase_envelope length must equal n")
 
@@ -121,6 +124,13 @@ class AdditiveWaveGenerator:
             effective_amps = amps + padded_amp_offsets
         else:
             effective_amps = amps
+
+        if amp_gains is not None:
+            # Multiplicative, so a short array pads with 1.0 (a zero pad
+            # would silently mute harmonics, unlike the additive offsets).
+            padded_amp_gains = np.ones(num_harmonics, dtype=np.float64)
+            padded_amp_gains[:len(amp_gains)] = amp_gains
+            effective_amps = effective_amps * padded_amp_gains
 
         # Mute harmonics that would alias past Nyquist at this f0.
         nyquist = self._sample_rate / 2.0

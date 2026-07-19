@@ -102,13 +102,44 @@ class RackApp(tk.Tk):
         self._vol_label.pack(side="left")
         self._vol_scale.set(self._settings.volume_default_db)
 
+        # per-source volume (linked mode only): lets "Both" monitor mode be
+        # balanced instead of a flat 50/50 average.
+        self._mix_frame = ttk.Frame(bar, style="Bar.TFrame")
+        self._enc_vol_scale = self._build_mix_slider(self._mix_frame, "Enc")
+        self._dec_vol_scale = self._build_mix_slider(self._mix_frame, "Dec")
+
         self._monitor_frame = ttk.Frame(bar, style="Bar.TFrame")
         ttk.Label(self._monitor_frame, text="Monitor", style="Bar.TLabel").pack(
             side="left", padx=(0, 6))
         self._monitor_seg = Segmented(
-            self._monitor_frame, [("Enc", "encoder"), ("Dec", "decoder")],
+            self._monitor_frame,
+            [("Enc", "encoder"), ("Dec", "decoder"), ("Both", "both")],
             self._on_monitor, "encoder")
         self._monitor_seg.pack(side="left")
+
+    def _build_mix_slider(self, parent, label: str) -> ttk.Scale:
+        # dB scale (matches the master Vol slider) so the fader reads
+        # perceptually linear instead of jumping mostly in the top 10%.
+        frame = ttk.Frame(parent, style="Bar.TFrame")
+        frame.pack(side="left", padx=(0, 12))
+        ttk.Label(frame, text=label, style="Bar.TLabel").pack(side="left", padx=(0, 6))
+        scale = ttk.Scale(frame, from_=self._settings.volume_min_db,
+                          to=self._settings.volume_max_db,
+                          orient="horizontal", length=80,
+                          command=lambda v, lbl=label: self._on_mix_vol(lbl, v))
+        scale.pack(side="left")
+        scale.set(0.0)
+        return scale
+
+    def _on_mix_vol(self, which: str, value) -> None:
+        if self._engine is None or not hasattr(self._engine, "set_enc_gain"):
+            return
+        db = float(value)
+        gain = 0.0 if db <= self._settings.volume_min_db else 10 ** (db / 20.0)
+        if which == "Enc":
+            self._engine.set_enc_gain(gain)
+        else:
+            self._engine.set_dec_gain(gain)
 
     # ── module management ───────────────────────────────────────────────────
     def _add_module(self, which: str) -> None:
@@ -194,8 +225,12 @@ class RackApp(tk.Tk):
         if linked:
             self._monitor_frame.pack(side="right", padx=(0, 4))
             self._monitor_seg.set_silent(self._engine.get_source())
+            self._mix_frame.pack(side="right", padx=(0, 12))
+            self._on_mix_vol("Enc", self._enc_vol_scale.get())
+            self._on_mix_vol("Dec", self._dec_vol_scale.get())
         else:
             self._monitor_frame.pack_forget()
+            self._mix_frame.pack_forget()
         self._on_volume(self._vol_scale.get())
 
     def _build_empty_state(self) -> None:

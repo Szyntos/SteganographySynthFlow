@@ -1,5 +1,7 @@
 from typing import Dict, Optional
 
+import numpy as np
+
 from AdditiveWaveGenerator import AdditiveWaveGenerator
 from AudioChunk import AudioChunk
 from Encoder import Encoder, EncodingStrategy
@@ -9,6 +11,7 @@ from Serializer import AudioSerializer, BinarySerializer, ImageSerializer, TextS
 from SerializerMode import SerializerMode
 from Settings import Settings
 from StrategyKinds import ENCODING_STRATEGY_CLASSES, apply_strategy_kind
+from SynthVoice import SynthVoice
 from WaveParams import WaveParams
 
 _STRATEGY_CLASSES = ENCODING_STRATEGY_CLASSES
@@ -59,6 +62,7 @@ class EncoderDSP:
 
         self._wave_params: Optional[WaveParams] = None
         self._wave_generator = self._make_wave_generator()
+        self._synth_voice = SynthVoice(self.settings)
 
         self._strategies: Dict[str, EncodingStrategy] = {
             kind: self._make_strategy_for(kind) for kind in _PAYLOAD_KINDS
@@ -118,6 +122,7 @@ class EncoderDSP:
         else:
             raise ValueError(f"Unknown payload kind: {kind}")
         strategy = self._encoding_cls()(self.settings, self._wave_generator, serializer)
+        strategy.set_synth_voice(self._synth_voice)
         strategy.load_payload(self._payload_for(kind))
         return strategy
 
@@ -255,6 +260,26 @@ class EncoderDSP:
 
     def get_f0(self) -> float:
         return self._f0
+
+    # ── synth voice (envelopes + filter) ─────────────────────────────────────
+    def note_on(self) -> None:
+        self._synth_voice.note_on()
+
+    def note_off(self) -> None:
+        self._synth_voice.note_off()
+
+    def set_voice_enabled(self, enabled: bool) -> None:
+        self._synth_voice.set_enabled(enabled)
+
+    def get_filtered_wave_params(self) -> WaveParams:
+        """The carrier as the filter currently shapes it (amp envelope
+        excluded so the displayed shape doesn't shrink with volume). The
+        true, unmodified wave stays what get_wave_params() returns."""
+        params = self.get_wave_params()
+        freqs = np.asarray(params.omegas, dtype=np.float64) * self._f0
+        gains = self._synth_voice.display_filter_gains(freqs)
+        amps = (np.asarray(params.amps, dtype=np.float64) * gains).tolist()
+        return WaveParams(amps, list(params.phases), list(params.omegas))
 
     # ── processing ────────────────────────────────────────────────────────────
     def process(self, num_samples: int) -> AudioChunk:

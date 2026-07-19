@@ -21,6 +21,9 @@ _FIELDS = (
     ("Image W", "image_target_w", int),
     ("Image H", "image_target_h", int),
     ("Img chans", "image_channels", int),
+    ("Gate floor", "energy_gate_abs_floor", float),
+    ("Gate ratio", "energy_gate_drop_ratio", float),
+    ("Gate EMA a", "energy_gate_ema_alpha", float),
 )
 
 
