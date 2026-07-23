@@ -9,8 +9,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from SerializerMode import SerializerMode
-from Settings import Settings
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.Settings import Settings
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 

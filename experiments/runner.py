@@ -14,14 +14,14 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 from scipy.signal import resample_poly
 
-from AdditiveWaveGenerator import AdditiveWaveGenerator
-from DecoderDSP import DecoderDSP
-from Encoder import Encoder
-from EncoderDSP import EncoderDSP
-from Payload import AudioPayload, SymbolRow
-from Serializer import AudioSerializer
-from SerializerMode import SerializerMode
-from StrategyKinds import ENCODING_STRATEGY_CLASSES
+from synthflow.core.AdditiveWaveGenerator import AdditiveWaveGenerator
+from synthflow.core.DecoderDSP import DecoderDSP
+from synthflow.Encoder import Encoder
+from synthflow.core.EncoderDSP import EncoderDSP
+from synthflow.Payload import AudioPayload, SymbolRow
+from synthflow.Serializer import AudioSerializer
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.StrategyKinds import ENCODING_STRATEGY_CLASSES
 
 from .config import ExperimentConfig
 
@@ -135,7 +135,7 @@ def render_carrier(config: ExperimentConfig, num_samples: Optional[int] = None) 
     """The same carrier with an EMPTY payload (no bits encoded) — reference
     signal for imperceptibility metrics (encoded vs clean carrier)."""
     settings = config.make_settings()
-    from StrategyKinds import apply_strategy_kind
+    from synthflow.core.StrategyKinds import apply_strategy_kind
     apply_strategy_kind(settings, config.strategy_kind)
     settings.set_bits_per_symbol(config.bits_per_symbol)
 
@@ -180,7 +180,7 @@ def run_experiment(config: ExperimentConfig) -> RunResult:
     dec.set_payload_kind(config.payload_kind)
     dec.set_codec_mode(config.codec_mode)
     dec.set_bits_per_symbol(config.bits_per_symbol)
-    from Sink import SinkBehaviour
+    from synthflow.Sink import SinkBehaviour
     dec.set_sink_behaviour(
         SinkBehaviour.CLEAN if config.sink_behaviour == "clean" else SinkBehaviour.LIVE)
     dec.set_f0_estimator_mode(config.f0_mode)

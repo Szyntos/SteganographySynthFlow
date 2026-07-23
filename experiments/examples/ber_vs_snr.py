@@ -4,13 +4,11 @@ Run from the repo root:  python experiments/examples/ber_vs_snr.py
 Writes results/ber_vs_snr.csv and results/ber_vs_snr.png.
 """
 
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
-
 from experiments import ExperimentConfig, channel, metrics, save_csv, sweep
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 from experiments.plotting import plot_metric_vs_param
 
 # 26 s: a full 60x60x3 image at the default rate needs ~22 s plus sync.

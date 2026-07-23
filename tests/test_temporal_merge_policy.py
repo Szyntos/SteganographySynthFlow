@@ -1,4 +1,4 @@
-from Sink.temporal_merge_policy import TemporalMergePolicy
+from synthflow.Sink.temporal_merge_policy import TemporalMergePolicy
 
 
 def full_mask(n):

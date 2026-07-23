@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from DecoderDSP import DecoderDSP
-from EncoderDSP import EncoderDSP
-from Settings import Settings
-from WaveParams import WaveParams
+from synthflow.core.DecoderDSP import DecoderDSP
+from synthflow.core.EncoderDSP import EncoderDSP
+from synthflow.core.Settings import Settings
+from synthflow.core.WaveParams import WaveParams
 
 
 def _custom_params(settings: Settings) -> WaveParams:

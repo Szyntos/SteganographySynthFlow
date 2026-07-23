@@ -2,15 +2,15 @@ import random
 
 import pytest
 
-from Payload.pixel_codec import (
+from synthflow.Payload.pixel_codec import (
     AnaloguePixelCodec,
     DigitalPixelCodec,
     bits_from_bytes_msb_first,
     bytes_from_bits_msb_first,
     make_pixel_codec,
 )
-from SerializerMode import SerializerMode
-from Settings import Settings
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.Settings import Settings
 
 
 class TestBitHelpers:

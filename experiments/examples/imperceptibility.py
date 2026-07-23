@@ -4,14 +4,12 @@ Run from the repo root:  python experiments/examples/imperceptibility.py
 """
 
 import math
-import sys
 from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
 
 from experiments import (ExperimentConfig, metrics, render_carrier,
                          run_experiment, save_csv)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 rows = []
 for phase_range in (math.pi / 32, math.pi / 16, math.pi / 8, math.pi / 4):

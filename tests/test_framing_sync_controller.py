@@ -1,8 +1,8 @@
 import random
 
-from Framing.FrameGenerator import FrameGenerator
-from Framing.FramingSyncController import FramingSyncController
-from Settings import Settings
+from synthflow.Framing.FrameGenerator import FrameGenerator
+from synthflow.Framing.FramingSyncController import FramingSyncController
+from synthflow.core.Settings import Settings
 
 
 def pattern_rows(bits, chunk_len):

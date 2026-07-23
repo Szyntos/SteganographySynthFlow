@@ -3,13 +3,13 @@
 import pytest
 from PIL import Image
 
-from Framing.FramingSyncController import FramingSyncController
-from Payload import ImagePayload, SymbolRow
-from Payload.pixel_codec import make_pixel_codec
-from Serializer import ImageSerializer
-from SerializerMode import SerializerMode
-from Settings import Settings
-from Sink import ImageSink, SinkBehaviour
+from synthflow.Framing.FramingSyncController import FramingSyncController
+from synthflow.Payload import ImagePayload, SymbolRow
+from synthflow.Payload.pixel_codec import make_pixel_codec
+from synthflow.Serializer import ImageSerializer
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.Settings import Settings
+from synthflow.Sink import ImageSink, SinkBehaviour
 
 
 @pytest.fixture

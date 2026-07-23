@@ -2,13 +2,13 @@
 
 import pytest
 
-from Framing.FramingSyncController import FramingSyncController
-from Payload import TextPayload
-from Payload.pixel_codec import make_pixel_codec
-from Serializer import TextSerializer
-from SerializerMode import SerializerMode
-from Settings import Settings
-from Sink import RawTextSink, SinkBehaviour, TextSink
+from synthflow.Framing.FramingSyncController import FramingSyncController
+from synthflow.Payload import TextPayload
+from synthflow.Payload.pixel_codec import make_pixel_codec
+from synthflow.Serializer import TextSerializer
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.Settings import Settings
+from synthflow.Sink import RawTextSink, SinkBehaviour, TextSink
 
 TEST_TEXT = "Hello, world! éèç \U0001F600"
 

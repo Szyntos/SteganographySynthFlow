@@ -4,16 +4,16 @@ decode from audio -> deserialize -> reconstructed image."""
 import pytest
 from PIL import Image
 
-from AdditiveWaveGenerator import AdditiveWaveGenerator
-from Decoder import Decoder, TwoSplitDecodingStrategy
-from Encoder import Encoder, TwoSplitEncodingStrategy
-from Framing.FramingSyncController import FramingSyncController
-from Payload import ImagePayload
-from Payload.pixel_codec import make_pixel_codec
-from Serializer import ImageSerializer
-from SerializerMode import SerializerMode
-from Settings import Settings
-from Sink import ImageSink, SinkBehaviour
+from synthflow.core.AdditiveWaveGenerator import AdditiveWaveGenerator
+from synthflow.Decoder import Decoder, TwoSplitDecodingStrategy
+from synthflow.Encoder import Encoder, TwoSplitEncodingStrategy
+from synthflow.Framing.FramingSyncController import FramingSyncController
+from synthflow.Payload import ImagePayload
+from synthflow.Payload.pixel_codec import make_pixel_codec
+from synthflow.Serializer import ImageSerializer
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.Settings import Settings
+from synthflow.Sink import ImageSink, SinkBehaviour
 
 
 @pytest.fixture

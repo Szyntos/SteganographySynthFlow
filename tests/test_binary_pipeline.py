@@ -2,13 +2,13 @@
 
 import pytest
 
-from Framing.FramingSyncController import FramingSyncController
-from Payload import BinaryPayload
-from Payload.pixel_codec import make_pixel_codec
-from Serializer import BinarySerializer
-from SerializerMode import SerializerMode
-from Settings import Settings
-from Sink import BinarySink, RawBinarySink, SinkBehaviour
+from synthflow.Framing.FramingSyncController import FramingSyncController
+from synthflow.Payload import BinaryPayload
+from synthflow.Payload.pixel_codec import make_pixel_codec
+from synthflow.Serializer import BinarySerializer
+from synthflow.core.SerializerMode import SerializerMode
+from synthflow.core.Settings import Settings
+from synthflow.Sink import BinarySink, RawBinarySink, SinkBehaviour
 
 
 @pytest.fixture
