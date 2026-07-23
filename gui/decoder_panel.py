@@ -116,11 +116,11 @@ class DecoderPanel(Panel):
                 self._on_strategy, "two")
             self._strategy_seg.grid(row=1, column=1, sticky="ew", pady=2)
 
-            ttk.Label(tx.content, text="Img codec", style="Dim.TLabel", width=9).grid(
+            ttk.Label(tx.content, text="Codec", style="Dim.TLabel", width=9).grid(
                 row=2, column=0, sticky="w", pady=2)
             self._codec_seg = Segmented(
                 tx.content, [("Digital", "digital"), ("Analogue", "analogue")],
-                self._on_codec, "digital")
+                self._on_codec, "analogue")
             self._codec_seg.grid(row=2, column=1, sticky="ew", pady=2)
 
             ttk.Label(tx.content, text="Bits/sym", style="Dim.TLabel", width=9).grid(
@@ -132,6 +132,15 @@ class DecoderPanel(Panel):
                                               settings.bits_per_symbol_max + 1)])
             bits_combo.grid(row=3, column=1, sticky="w", pady=2)
             bits_combo.bind("<<ComboboxSelected>>", self._on_bits)
+
+            ttk.Label(tx.content, text="Smp/sym", style="Dim.TLabel", width=9).grid(
+                row=4, column=0, sticky="w", pady=2)
+            self._samples_var = tk.StringVar(value=str(settings.audio_samples_per_symbol))
+            self._samples_combo = ttk.Combobox(
+                tx.content, textvariable=self._samples_var, state="readonly", width=5,
+                values=[str(2 ** i) for i in range(settings.bits_per_symbol_max.bit_length())])
+            self._samples_combo.grid(row=4, column=1, sticky="w", pady=2)
+            self._samples_combo.bind("<<ComboboxSelected>>", self._on_samples_per_symbol)
         else:
             self._kind_seg = None
             link = ttk.Label(body, text="⛓  Transmission parameters linked to encoder",
@@ -295,6 +304,13 @@ class DecoderPanel(Panel):
             messagebox.showerror("Bits per Symbol Error", str(exc))
             self._bits_var.set(str(self._settings.bits_per_symbol))
 
+    def _on_samples_per_symbol(self, _event=None) -> None:
+        try:
+            self._engine.set_audio_samples_per_symbol(int(self._samples_var.get()))
+        except Exception as exc:
+            messagebox.showerror("Samples per Symbol Error", str(exc))
+            self._samples_var.set(str(self._settings.audio_samples_per_symbol))
+
     def _on_apply_dsp(self, values: dict) -> None:
         prev_total = self._settings.total_harmonics
         self._engine.apply_dsp_settings(values)
@@ -381,7 +397,7 @@ class DecoderPanel(Panel):
     def _update_kind_state(self) -> None:
         kind = self._current_kind
         if self._kind_seg is not None:
-            self._codec_seg.set_enabled(kind != "audio")
+            self._samples_combo.configure(state="readonly" if kind == "audio" else "disabled")
         self._sink_seg.set_enabled(kind != "audio")
         self._save_audio_btn.state(["!disabled" if kind == "audio" else "disabled"])
         self._save_data_btn.state(

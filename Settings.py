@@ -50,8 +50,8 @@ class DspSettings:
         return (self.data_harmonics * self.fs_out) // self.chunk_size
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
-        if not 1 <= bits_per_symbol <= 8:
-            raise ValueError("bits_per_symbol must be in [1, 8]")
+        if not 1 <= bits_per_symbol <= 32:
+            raise ValueError("bits_per_symbol must be in [1, 32]")
         self.bits_per_symbol = bits_per_symbol
 
     def set_chunk_size(self, chunk_size: int) -> None:
@@ -164,7 +164,7 @@ class GuiSettings:
         self.gui_poll_interval_ms: int = 100
         self.gui_note_poll_interval_ms: int = 50
         self.bits_per_symbol_min: int = 1
-        self.bits_per_symbol_max: int = 8
+        self.bits_per_symbol_max: int = 32
 
         # MIDI file playback tempo knob (multiplier on the file's own tempo)
         self.midi_tempo_scale_min: float = 0.25
@@ -270,9 +270,16 @@ class TemporalMergeSettings:
 class PixelCodecSettings:
     def __init__(self):
         self.pixel_codec_no_data_epsilon: float = 0.03
+        # Digital audio mode: samples_per_symbol raw samples share one
+        # harmonic's bits_per_symbol budget, each quantized to
+        # bits_per_symbol - log2(samples_per_symbol) bits. Must be a power
+        # of 2 leaving at least 1 bit of depth per sample.
+        self.audio_samples_per_symbol: int = 1
 
     def validate(self) -> None:
-        pass
+        spb = self.audio_samples_per_symbol
+        if spb < 1 or (spb & (spb - 1)) != 0:
+            raise ValueError("audio_samples_per_symbol must be a power of 2")
 
 
 class SynthVoiceSettings:

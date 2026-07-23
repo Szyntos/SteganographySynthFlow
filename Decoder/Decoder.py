@@ -1,7 +1,8 @@
-from typing import List
+from typing import List, Optional
 
 from AudioChunk import AudioChunk
 from Payload import SymbolRow
+from Payload.pixel_codec import AudioDigitalCodec
 from SamplesFifo import SamplesFifo
 from Settings import Settings
 from Sink import SymbolSink
@@ -16,11 +17,13 @@ class Decoder:
             decoding_strategy: DecodingStrategy,
             sink: SymbolSink,
             resample_method: "ResampleMethod | str" = ResampleMethod.POLY,
+            audio_codec: Optional[AudioDigitalCodec] = None,
     ):
         self._settings = settings
         self._decoding_strategy: DecodingStrategy = decoding_strategy
         self._sink: SymbolSink = sink
         self._resampler = RowToAudioResampler(settings, resample_method)
+        self._resampler.set_audio_codec(audio_codec)
         self._max_driver_block_size: int = 0
         self._audio_chunk_output_fifo: SamplesFifo = SamplesFifo()
         self.reconfigure()

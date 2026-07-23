@@ -6,7 +6,7 @@ from DropTolerance import DropAction, DropTolerance, DropToleranceConfig
 from EnergyGate import EnergyGate, EnergyGateConfig
 from F0Estimator import F0Tracker
 from Framing import FramingSyncController
-from Payload.pixel_codec import make_pixel_codec
+from Payload.pixel_codec import AudioDigitalCodec, make_pixel_codec
 from SerializerMode import SerializerMode
 from Settings import Settings
 from Sink import (
@@ -29,7 +29,7 @@ class DecoderDSP:
 
         self._payload_kind: str = "audio"
         self._strategy_kind: str = "two"
-        self._codec_mode: SerializerMode = SerializerMode.DIGITAL
+        self._codec_mode: SerializerMode = SerializerMode.ANALOGUE
         self._sink_behaviour: SinkBehaviour = SinkBehaviour.LIVE
         self._resample_method: str = "poly"
         apply_strategy_kind(self.settings, self._strategy_kind)
@@ -139,11 +139,27 @@ class DecoderDSP:
             setattr(self, raw_sink_attr, raw_sink)
             decode_sink = SinkTee(sink, raw_sink)
         else:
-            sink = AudioSink(FramingSyncController(), SinkBehaviour.LIVE, self.settings)
+            sink = AudioSink(
+                FramingSyncController(), SinkBehaviour.LIVE, self.settings,
+                serializer_mode=self._codec_mode,
+            )
             self._audio_sink = sink
             decode_sink = sink
 
-        self._decoder = Decoder(self.settings, self._dec_strategy, decode_sink, self._resample_method)
+        audio_codec = None
+        if self._payload_kind == "audio" and self._codec_mode == SerializerMode.DIGITAL:
+            # The live monitor's raw per-harmonic values are bit-packed
+            # symbols in this mode (see AudioDigitalCodec), not smooth
+            # amplitude samples; unpack them before they hit the
+            # resampler's reconstruction filter, mirroring what AudioSink
+            # does for the WAV-dump path.
+            audio_codec = AudioDigitalCodec(
+                self.settings.bits_per_symbol, self.settings.audio_samples_per_symbol,
+            )
+        self._decoder = Decoder(
+            self.settings, self._dec_strategy, decode_sink, self._resample_method,
+            audio_codec=audio_codec,
+        )
 
     # ── real-time controls ───────────────────────────────────────────────────
     def get_strategy_kind(self) -> str:
@@ -179,8 +195,12 @@ class DecoderDSP:
         self._image_codec = make_pixel_codec(mode, self.settings)
         self._binary_codec = make_pixel_codec(mode, self.settings)
         self._text_codec = make_pixel_codec(mode, self.settings)
-        if self._payload_kind != "audio":
-            self._dec_strategy.reconfigure()
+        self._dec_strategy.reconfigure()
+        self._rebuild_decode_chain()
+
+    def set_audio_samples_per_symbol(self, samples_per_symbol: int) -> None:
+        self.settings.audio_samples_per_symbol = int(samples_per_symbol)
+        if self._payload_kind == "audio":
             self._rebuild_decode_chain()
 
     def set_harmonic_scalars(self, scalars: Optional[List[float]]) -> None:

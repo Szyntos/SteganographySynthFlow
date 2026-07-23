@@ -44,8 +44,8 @@ class DigitalPixelCodec:
 
     def __init__(self, bits_per_symbol: int, data_harmonics: int,
                  bits_per_chunk: int = None, no_data_epsilon: float = 0.03):
-        if not 1 <= bits_per_symbol <= 8:
-            raise ValueError("DigitalPixelCodec: bits_per_symbol must be in [1, 8]")
+        if not 1 <= bits_per_symbol <= 32:
+            raise ValueError("DigitalPixelCodec: bits_per_symbol must be in [1, 32]")
         self._bits_per_symbol = bits_per_symbol
         self._data_harmonics = data_harmonics
         self._bits_per_chunk = bits_per_chunk if bits_per_chunk is not None else data_harmonics * bits_per_symbol
@@ -112,6 +112,58 @@ class AnaloguePixelCodec:
             u = (v + 1.0) * 0.5
             out[i] = min(255, max(0, int(u * 255.0 + 0.5)))
         return bytes(out)
+
+
+class AudioDigitalCodec:
+    """Splits one harmonic's fixed bits_per_symbol budget evenly across
+    `samples_per_symbol` raw audio samples (each in [-1, 1]), MSB-first:
+    `depth = bits_per_symbol // samples_per_symbol` bits per sample. The
+    packed value never exceeds the harmonic's original bits_per_symbol
+    range, so more samples per symbol trades amplitude resolution for
+    sample-rate density within the same physical quantization budget."""
+
+    def __init__(self, bits_per_symbol: int, samples_per_symbol: int):
+        if samples_per_symbol < 1 or (samples_per_symbol & (samples_per_symbol - 1)) != 0:
+            raise ValueError("AudioDigitalCodec: samples_per_symbol must be a power of 2")
+        depth = bits_per_symbol // samples_per_symbol
+        if depth < 1:
+            raise ValueError(
+                "AudioDigitalCodec: samples_per_symbol too large for bits_per_symbol")
+        self._samples_per_symbol = samples_per_symbol
+        self._depth = depth
+        self._max_v = (1 << (depth * samples_per_symbol)) - 1
+        self._max_sub_v = (1 << depth) - 1
+        self.chunk_size = samples_per_symbol
+
+    @property
+    def samples_per_symbol(self) -> int:
+        return self._samples_per_symbol
+
+    def _sample_to_level(self, x: float) -> int:
+        xc = min(max(x, -1.0), 1.0)
+        return int((xc + 1.0) * 0.5 * self._max_sub_v + 0.5)
+
+    def _level_to_sample(self, v: int) -> float:
+        return -1.0 + 2.0 * (v / self._max_sub_v)
+
+    def encode_chunk(self, samples: List[float]) -> List[float]:
+        chunk = list(samples[: self.chunk_size])
+        if len(chunk) < self.chunk_size:
+            chunk += [0.0] * (self.chunk_size - len(chunk))
+        v = 0
+        for x in chunk:
+            v = (v << self._depth) | self._sample_to_level(x)
+        return [-1.0 + 2.0 * (v / self._max_v)]
+
+    def decode_chunk(self, row: List[float]) -> List[float]:
+        x = row[0] if row else -1.0
+        xc = min(max(x, -1.0), 1.0)
+        v = int((xc + 1.0) * 0.5 * self._max_v + 0.5)
+        out: List[float] = []
+        for i in range(self._samples_per_symbol):
+            shift = self._depth * (self._samples_per_symbol - 1 - i)
+            out.append(self._level_to_sample((v >> shift) & self._max_sub_v))
+        return out
 
 
 def make_pixel_codec(serializer_mode: SerializerMode, settings: Settings) -> PixelCodec:

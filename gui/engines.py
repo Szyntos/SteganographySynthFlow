@@ -308,6 +308,10 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
         with self._lock:
             self._enc.set_bits_per_symbol(bits)
 
+    def set_audio_samples_per_symbol(self, samples_per_symbol: int) -> None:
+        with self._lock:
+            self._enc.set_audio_samples_per_symbol(samples_per_symbol)
+
     def set_encoder_f0(self, f0: float) -> None:
         self._enc.set_f0(f0)
 
@@ -414,6 +418,10 @@ class DecoderEngine(_EngineBase, _DecoderSideMixin):
         with self._lock:
             self._dec.set_bits_per_symbol(bits)
 
+    def set_audio_samples_per_symbol(self, samples_per_symbol: int) -> None:
+        with self._lock:
+            self._dec.set_audio_samples_per_symbol(samples_per_symbol)
+
     def apply_dsp_settings(self, values: dict) -> None:
         with self._lock:
             self._dec.apply_dsp_settings(values)
@@ -496,6 +504,11 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
         with self._lock:
             self._enc.set_bits_per_symbol(bits)
             self._dec.set_bits_per_symbol(bits)
+
+    def set_audio_samples_per_symbol(self, samples_per_symbol: int) -> None:
+        with self._lock:
+            self._enc.set_audio_samples_per_symbol(samples_per_symbol)
+            self._dec.set_audio_samples_per_symbol(samples_per_symbol)
 
     def apply_dsp_settings(self, values: dict) -> None:
         # Both DSPs share one Settings object: mutate it once through the

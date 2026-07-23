@@ -9,6 +9,8 @@ from scipy.signal import resample_poly
 
 from Framing import FramingSyncController
 from Payload import SymbolRow
+from Payload.pixel_codec import AudioDigitalCodec
+from SerializerMode import SerializerMode
 from Settings import Settings
 from .Sink import Sink
 from .SinkBehaviour import SinkBehaviour
@@ -27,11 +29,20 @@ class AudioSink(Sink):
                  sink_behaviour: SinkBehaviour,
                  settings: Optional[Settings] = None,
                  sample_rate: Optional[int] = None,
-                 max_buffer_seconds: Optional[float] = None):
+                 max_buffer_seconds: Optional[float] = None,
+                 serializer_mode: SerializerMode = SerializerMode.ANALOGUE):
         super().__init__(framing_sync_controller, sink_behaviour)
         if sample_rate is None and settings is None:
             raise ValueError("AudioSink: provide either settings or an explicit sample_rate")
-        self._sample_rate = int(sample_rate if sample_rate is not None else settings.MSG_FS)
+        if sample_rate is not None:
+            self._sample_rate = int(sample_rate)
+        else:
+            self._sample_rate = int(settings.MSG_FS)
+            if serializer_mode == SerializerMode.DIGITAL:
+                # Mirrors AudioSerializer._resample: samples_per_symbol raw
+                # samples share one symbol's time slot, so playback needs a
+                # denser sample rate to keep the same duration/speed.
+                self._sample_rate *= settings.audio_samples_per_symbol
         buffer_seconds = (
             max_buffer_seconds if max_buffer_seconds is not None
             else (settings.sink_max_buffer_seconds if settings is not None else 120.0)
@@ -39,8 +50,21 @@ class AudioSink(Sink):
         max_samples = int(self._sample_rate * buffer_seconds)
         self._buffer: deque = deque(maxlen=max_samples)
 
+        self._audio_codec: Optional[AudioDigitalCodec] = None
+        if serializer_mode == SerializerMode.DIGITAL:
+            if settings is None:
+                raise ValueError("AudioSink: digital mode requires settings")
+            self._audio_codec = AudioDigitalCodec(
+                settings.bits_per_symbol, settings.audio_samples_per_symbol,
+            )
+
     def push(self, symbol_row: SymbolRow) -> None:
-        self._buffer.extend(symbol_row.get_offsets())
+        offsets = symbol_row.get_offsets()
+        if self._audio_codec is None:
+            self._buffer.extend(offsets)
+            return
+        for level in offsets:
+            self._buffer.extend(self._audio_codec.decode_chunk([level]))
 
     def push_many(self, symbol_rows: List[SymbolRow]) -> None:
         for symbol_row in symbol_rows:

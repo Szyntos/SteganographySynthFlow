@@ -40,7 +40,7 @@ class EncoderDSP:
 
         self._payload_kind: str = "audio"
         self._strategy_kind: str = "two"
-        self._codec_mode: SerializerMode = SerializerMode.DIGITAL
+        self._codec_mode: SerializerMode = SerializerMode.ANALOGUE
         self._f0: float = 0.0
         apply_strategy_kind(self.settings, self._strategy_kind)
 
@@ -112,7 +112,7 @@ class EncoderDSP:
 
     def _make_strategy_for(self, kind: str) -> EncodingStrategy:
         if kind == "audio":
-            serializer = AudioSerializer(self.settings, SerializerMode.DIGITAL)
+            serializer = AudioSerializer(self.settings, self._codec_mode)
         elif kind == "image":
             serializer = ImageSerializer(self.settings, self._codec_mode)
         elif kind == "binary":
@@ -184,6 +184,19 @@ class EncoderDSP:
         for kind in _CODEC_PAYLOAD_KINDS:
             payload = self._reload_codec_payload(kind, mode)
             self._strategies[kind].load_payload(payload)
+        self._rebuild_strategy_for("audio")
+        if self._payload_kind == "audio":
+            self._encoding_strategy = self._strategies["audio"]
+            self._encoding_strategy.set_f0(self._f0)
+            self._encoder.set_encoding_strategy(self._encoding_strategy)
+
+    def set_audio_samples_per_symbol(self, samples_per_symbol: int) -> None:
+        self.settings.audio_samples_per_symbol = int(samples_per_symbol)
+        self._rebuild_strategy_for("audio")
+        if self._payload_kind == "audio":
+            self._encoding_strategy = self._strategies["audio"]
+            self._encoding_strategy.set_f0(self._f0)
+            self._encoder.set_encoding_strategy(self._encoding_strategy)
 
     def set_bits_per_symbol(self, bits_per_symbol: int) -> None:
         self.settings.set_bits_per_symbol(int(bits_per_symbol))

@@ -1,9 +1,10 @@
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from scipy.signal import resample_poly
 
+from Payload.pixel_codec import AudioDigitalCodec
 from Settings import Settings
 
 
@@ -42,6 +43,13 @@ class RowToAudioResampler:
         self._lookahead_rows: int = settings.decoder_lookahead_rows
         self._chunk_size: int = 0
         self._data_harmonics: int = 0
+        # When set (audio payload + DIGITAL codec), each row's raw per-harmonic
+        # values are bit-packed symbols, not smooth amplitude samples — they
+        # must be unpacked via decode_chunk before resampling, or the packed
+        # bit-jitter aliases through the reconstruction filter instead of the
+        # real audio content it encodes.
+        self._audio_codec: Optional[AudioDigitalCodec] = None
+        self._row_len: int = 0
         self._pending_rows: List[List[float]] = []
         self._history: List[float] = []
         self.set_resample_method(resample_method)
@@ -52,20 +60,36 @@ class RowToAudioResampler:
     def get_resample_method(self) -> ResampleMethod:
         return self._resample_method
 
+    def set_audio_codec(self, audio_codec: Optional[AudioDigitalCodec]) -> None:
+        self._audio_codec = audio_codec
+        self._row_len = self._data_harmonics * (
+            audio_codec.samples_per_symbol if audio_codec is not None else 1
+        )
+        self._pending_rows = []
+        self._history = []
+
     def reconfigure(self, chunk_size: int, data_harmonics: int) -> None:
         self._chunk_size = chunk_size
         self._data_harmonics = data_harmonics
+        self._row_len = data_harmonics * (
+            self._audio_codec.samples_per_symbol if self._audio_codec is not None else 1
+        )
         self._pending_rows = []
         self._history = []
 
     def push_row(self, offsets: List[float]) -> List[float]:
+        if self._audio_codec is not None:
+            decoded: List[float] = []
+            for level in offsets:
+                decoded.extend(self._audio_codec.decode_chunk([level]))
+            offsets = decoded
         self._pending_rows.append(offsets)
         if len(self._pending_rows) >= self._batch_rows + self._lookahead_rows:
             return self._resample_pending_rows()
         return []
 
     def _resample_pending_rows(self) -> List[float]:
-        data_harmonics = self._data_harmonics
+        data_harmonics = self._row_len
         chunk_size = self._chunk_size
 
         # Only the first _batch_rows rows are emitted this call; the
