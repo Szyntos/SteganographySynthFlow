@@ -1,57 +1,61 @@
 # SteganographySynthFlow
 
-Real-time audio steganography built on an additive synthesizer. A payload
-(audio, image, text, or arbitrary binary) is hidden in the **phase offsets of
-the harmonics** of a synthesized musical tone: the carrier is a 50-harmonic
-additive tone at a playable fundamental `f0` (driven live from a MIDI device
-or the computer keyboard), and each chunk of samples modulates the phases of
-40 data harmonics to carry one symbol row. A decoder listening to the audio
-recovers the phase offsets and reconstructs the payload in real time.
+This is a little synthesizer that hides data inside the sound it makes.
 
-## How it works
+Play a note (mouse, QWERTY keyboard, MIDI controller, whatever) and you get
+a normal-sounding additive tone — 50 harmonics stacked on top of a
+fundamental. What you don't hear is the 1990's hiphop encoded on their phases.
 
-- **Carrier** — `AdditiveWaveGenerator` synthesizes `total_harmonics` (50)
-  sine partials with 1/n amplitudes at the current `f0`.
-- **Embedding** — an `EncodingStrategy` splits each chunk into pilot and data
-  regions (`Framing/SplitLayout`). The pilot region carries the clean carrier
-  for phase reference; in the data region each data harmonic's phase is
-  offset by the symbol value, ramped in/out by an envelope. `TwoSplit` uses
-  one pilot/data pair per chunk; `FourSplit` packs two pairs (and therefore
-  needs double the chunk size to keep the same DFT bin spacing).
-- **Serialization** — `Serializer/` turns a payload into `SymbolRow`s
-  (per-harmonic phase offsets), either analogue (audio samples mapped
-  directly to phase) or digital (framed bytes at `bits_per_symbol` bits per
-  harmonic). `Framing/` adds sync frames so the decoder can lock on.
-- **Decoding** — a `DecodingStrategy` estimates the per-harmonic phases via
-  DFT against the pilot reference, `FramingSyncController` finds frame
-  boundaries, and the recovered symbols flow into a `Sink/` (audio playback,
-  image reassembly, text, or raw bytes). `F0Estimator/` tracks the carrier
-  fundamental from the received audio; `EnergyGate` and `DropTolerance` keep
-  the decoder stable through silence and dropped chunks.
-- **Facades** — `EncoderDSP` and `DecoderDSP` assemble the full pipelines
-  behind a single API used by the GUIs.
+I built this mostly to see if I could get a covert channel riding on
+something that actually sounds like a musical instrument, rather than
+noise or a dial-up modem screech. It works.
 
-## Running
+## How it actually works
 
-Requires Python 3.10+ and the packages in `requirements.txt`
-(`pip install -r requirements.txt`).
+- **The carrier.** `AdditiveWaveGenerator` renders `total_harmonics` (50)
+  sine partials at 1/n amplitude on top of whatever `f0` you're currently
+  playing. That's the tone you hear - a sawtooth wave.
+- **Hiding the data.** Each chunk of audio gets split into a "pilot"
+  region (clean carrier, used as a phase reference) and a "data" region
+  where 40 of the harmonics get their phase offset by a symbol value,
+  ramped in and out so it doesn't click.
+- **Turning payloads into symbols.** `Serializer/` converts whatever you're
+  hiding into rows of per-harmonic phase offsets — either "analogue" mode
+  (audio samples mapped straight to phase) or "digital" mode (bytes framed
+  into fixed-size symbols, a few bits per harmonic). `Framing/` adds sync
+  markers so the decoder can find its footing without a shared clock.
+- **Pulling the data back out.** The decoder estimates each harmonic's
+  phase with a DFT against the pilot reference, syncs on the frame markers,
+  and hands recovered symbols off to a `Sink/` (playing audio back out,
+  rebuilding an image, printing text, whatever). `F0Estimator/` tracks the
+  fundamental from the incoming audio so it doesn't need to be told what
+  note is playing, and there's an energy gate plus some drop tolerance so
+  a bit of silence or a dropped chunk doesn't wreck the stream.
+- **Gluing it together.** `EncoderDSP` and `DecoderDSP` wire all of the
+  above into something the GUI can just call.
 
-- `python -m gui` — the rack GUI. Starts as an empty rack; add an Encoder
-  and/or Decoder module. With only one module it runs standalone against real
-  audio devices; with both, the encoder feeds the decoder internally
-  (loopback) and their transmission parameters are linked. A playable piano
-  keyboard bar (mouse, QWERTY, MIDI device, MIDI file) spans the bottom
-  whenever an encoder is racked. Run a second instance for an independent
-  encoder/decoder pair.
-- `python main.py` — headless encode→decode round trip that plots
-  encoded/decoded/expected signals.
-- `python exp/encode_vs_carrier.py` — dumps diagnostic WAVs (carrier vs.
-  encoded vs. recovered) to `exp/output/`.
+## Running it
 
-## Experiments
+You'll need Python 3.10+ and the packages in `requirements.txt`, plus the
+project itself installed (editable, so it's importable as `synthflow`):
 
-`exp/harness.py` runs the pipeline offline (no audio device, no GUI) and is
-the entry point for parameter sweeps and plots:
+```
+pip install -r requirements.txt
+pip install -e .
+```
+
+- `python -m synthflow.gui` — the main way to use this. Opens an empty rack; drop in
+  an Encoder module, a Decoder module, or both. One module alone runs
+  against your real audio devices. Both together loop the encoder straight
+  into the decoder internally and keep their settings in sync. Whenever an
+  encoder is racked, a playable keyboard bar shows up along the bottom
+  (mouse clicks, QWERTY, a MIDI device, or a MIDI file all work). Want an
+  independent encoder and decoder pair instead? Launch a second instance.
+
+## Poking at it offline
+
+`exp/harness.py` runs the whole pipeline without touching an audio device
+or opening the GUI, which is what I use for parameter sweeps:
 
 ```python
 from exp.harness import run_round_trip
@@ -62,10 +66,6 @@ print(rt.rmse())          # decoded vs. expected
 rt.encoded, rt.decoded, rt.expected, rt.diff, rt.diff_dc_removed
 ```
 
-`run_round_trip` mutates the `Settings` it is given (chunk size follows the
-strategy), so **pass a fresh `Settings()` per configuration** rather than
-sharing one across a sweep.
-
 ## Tests
 
 ```
@@ -74,13 +74,22 @@ python -m pytest
 
 ## Layout
 
-| Path | Contents |
+| Path | What's there |
 | --- | --- |
-| `Encoder/`, `Decoder/` | Encode/decode strategies (`TwoSplit`, `FourSplit`) |
-| `Serializer/`, `Payload/`, `Sink/` | Payload ⇄ symbol-row conversion and output sinks |
-| `Framing/` | Pilot/data split layout, frame sync |
-| `F0Estimator/` | Autocorrelation & FFT f0 tracking, chromatic quantizer |
-| `EncoderDSP.py`, `DecoderDSP.py` | High-level pipeline facades used by the GUIs |
-| `Settings.py` | All DSP parameters (sample rate, chunk size, harmonics, bits/symbol) |
-| `split/` | Standalone encoder and decoder GUIs |
-| `tests/` | Pytest suite (pipelines, framing, codecs) |
+| `Encoder/`, `Decoder/` | The encode/decode strategies (`TwoSplit`, `FourSplit`) |
+| `Serializer/`, `Payload/`, `Sink/` | Payload ⇄ symbol-row conversion and where decoded output goes |
+| `Framing/` | Pilot/data layout and frame sync |
+| `F0Estimator/` | Autocorrelation & FFT pitch tracking, plus chromatic quantizing |
+| `EncoderDSP.py`, `DecoderDSP.py` | High-level pipelines the GUI talks to |
+| `Settings.py` | All the DSP knobs (sample rate, chunk size, harmonics, bits/symbol...) |
+| `gui/` | The rack GUI — panels stay free of DSP logic, engines stay free of Tk |
+| `tests/` | Pytest suite covering the pipelines, framing, and codecs |
+
+## A note on the phase trick
+
+Everything that shapes the sound (envelopes, filters, whatever comes next)
+has to be a pure per-harmonic *gain* multiplier applied once per chunk —
+never a real-time-domain filter, never a change mid-chunk. A real filter
+shifts phase, and phase is exactly what's carrying the data, so anything
+that touches it mid-stream corrupts the decode. If you're adding a new
+effect to the synth voice, that's the one rule not to break.
