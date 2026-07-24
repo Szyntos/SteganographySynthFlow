@@ -44,6 +44,8 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+(Everything lives under `src/synthflow/` as a real package — see Layout below.)
+
 - `python -m synthflow.gui` — the main way to use this. Opens an empty rack; drop in
   an Encoder module, a Decoder module, or both. One module alone runs
   against your real audio devices. Both together loop the encoder straight
@@ -54,17 +56,23 @@ pip install -e .
 
 ## Poking at it offline
 
-`exp/harness.py` runs the whole pipeline without touching an audio device
-or opening the GUI, which is what I use for parameter sweeps:
+`scripts/exp/harness.py` runs the whole pipeline without touching an audio
+device or opening the GUI, which is what I use for parameter sweeps:
 
 ```python
-from exp.harness import run_round_trip
-from Settings import Settings
+from scripts.exp.harness import run_round_trip
+from synthflow.core.Settings import Settings
 
 rt = run_round_trip(settings=Settings(), f0=400.0, strategy_kind="four")
 print(rt.rmse())          # decoded vs. expected
 rt.encoded, rt.decoded, rt.expected, rt.diff, rt.diff_dc_removed
 ```
+
+For actual thesis measurements (BER vs. SNR, imperceptibility, plots), use
+the `experiments/` package instead — `experiments/runner.py` and
+`experiments/sweep.py` drive full sweeps and write results/plots to
+`results/`; `scripts/exp/harness.py` is the lighter one-off/debugging
+harness.
 
 ## Tests
 
@@ -74,16 +82,25 @@ python -m pytest
 
 ## Layout
 
+Everything importable lives under `src/synthflow/`:
+
 | Path | What's there |
 | --- | --- |
+| `core/` | `AdditiveWaveGenerator`, `Settings`, `EncoderDSP`/`DecoderDSP`, `SynthVoice`, `EnergyGate`, `DropTolerance` |
 | `Encoder/`, `Decoder/` | The encode/decode strategies (`TwoSplit`, `FourSplit`) |
 | `Serializer/`, `Payload/`, `Sink/` | Payload ⇄ symbol-row conversion and where decoded output goes |
 | `Framing/` | Pilot/data layout and frame sync |
-| `F0Estimator/` | Autocorrelation & FFT pitch tracking, plus chromatic quantizing |
-| `EncoderDSP.py`, `DecoderDSP.py` | High-level pipelines the GUI talks to |
-| `Settings.py` | All the DSP knobs (sample rate, chunk size, harmonics, bits/symbol...) |
+| `F0Estimator/` | Autocorrelation & FFT pitch tracking, `F0Tracker`, chromatic quantizing |
+| `io_devices/` | Keyboard/MIDI note input, audio device I/O |
 | `gui/` | The rack GUI — panels stay free of DSP logic, engines stay free of Tk |
+
+Elsewhere in the repo:
+
+| Path | What's there |
+| --- | --- |
 | `tests/` | Pytest suite covering the pipelines, framing, and codecs |
+| `scripts/exp/harness.py` | Lightweight offline encode→decode harness (see above) |
+| `experiments/` | Full measurement/sweep infra (BER vs. SNR, imperceptibility, plots) — see `experiments/README.md` |
 
 ## A note on the phase trick
 
