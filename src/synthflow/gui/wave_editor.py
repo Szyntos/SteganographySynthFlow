@@ -11,10 +11,25 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
+import numpy as np
+from PIL import Image as PILImage, ImageTk
+from scipy.signal import stft as _stft
+import matplotlib as mpl
+
 from synthflow.gui.theme import Palette
 from synthflow.core.WaveParams import WaveParams
 
 _TWO_PI = 2.0 * math.pi
+
+
+def _build_colormap_lut(name: str = "magma") -> np.ndarray:
+    """256-entry RGB lookup table sampled from a real, perceptually-uniform
+    matplotlib colormap (same family used by professional spectral analyzers)."""
+    cmap = mpl.colormaps[name]
+    return (cmap(np.linspace(0.0, 1.0, 256))[:, :3] * 255).astype(np.uint8)
+
+
+_HEAT_LUT = _build_colormap_lut()
 
 
 def _draw_cycle(canvas: tk.Canvas, params: WaveParams, width: int, height: int,
@@ -49,6 +64,125 @@ class WaveViewer(tk.Canvas):
 
     def set_params(self, params: WaveParams) -> None:
         _draw_cycle(self, params, self._view_w, self._view_h)
+
+
+def _draw_scope(canvas: tk.Canvas, samples, f0: float, fs: float,
+                width: int, height: int, line_width: int = 1) -> None:
+    """Pitch-triggered scope: locks the display to a rising zero-crossing so
+    the trace holds still cycle to cycle instead of scrolling/jittering."""
+    canvas.delete("scope")
+    mid = height / 2.0
+    canvas.create_line(0, mid, width, mid, fill=Palette.PANEL_EDGE, tags="scope")
+    if samples is None or len(samples) < 4 or f0 <= 0 or fs <= 0:
+        return
+    period = fs / f0
+    span = int(min(len(samples) - 1, max(period * 3, 16)))
+    search_end = max(1, len(samples) - span)
+    trigger = 0
+    for i in range(1, search_end):
+        if samples[i - 1] <= 0.0 < samples[i]:
+            trigger = i
+            break
+    seg = samples[trigger:trigger + span]
+    if len(seg) < 2:
+        return
+    peak = max(1e-6, float(np.abs(seg).max()))
+    scale = (height / 2.0 - 3) / peak
+    n = len(seg)
+    points = []
+    for x in range(width):
+        idx = min(n - 1, int(x / width * n))
+        points.extend((x, mid - float(seg[idx]) * scale))
+    canvas.create_line(*points, fill=Palette.BLUE, width=line_width, tags="scope")
+
+
+class ScopeViewer(tk.Canvas):
+    """Live, pitch-bound oscilloscope for the actually-playing encoded audio
+    (fed samples straight from the output callback's ring buffer)."""
+
+    def __init__(self, parent, width: int = 220, height: int = 122):
+        super().__init__(parent, width=width, height=height, bg=Palette.INSET,
+                         highlightthickness=1, highlightbackground=Palette.PANEL_EDGE)
+        self._view_w = width
+        self._view_h = height
+        self.create_line(0, height / 2.0, width, height / 2.0,
+                         fill=Palette.PANEL_EDGE, tags="scope")
+
+    def update_samples(self, samples, f0: float, fs: float) -> None:
+        _draw_scope(self, samples, f0, fs, self._view_w, self._view_h)
+
+
+class SpectrogramViewer(tk.Canvas):
+    """Scrolling log-frequency spectrogram of the live encoded audio, built
+    like a DAW analyzer: a long FFT for real frequency resolution, 75%
+    overlapping windows for time resolution, and the log-frequency axis
+    resampled with a linear interpolation (not bucket-max) plus a Lanczos
+    resize into the canvas so the display reads smooth rather than blocky.
+
+    Speed sets how many overlapping columns are pushed per update (scroll
+    rate); gain shifts the dB-to-colour mapping (brightness).
+    """
+
+    _FFT_SIZE = 4096
+    _HOP = _FFT_SIZE // 4  # 75% overlap, matches typical DAW analyzers
+    _BIN_COUNT = 512  # internal frequency resolution, resampled to the canvas height
+    _DB_FLOOR = -90.0
+    _DB_CEIL = 0.0
+    _F_LO = 20.0
+
+    def __init__(self, parent, width: int = 420, height: int = 160):
+        super().__init__(parent, width=width, height=height, bg=Palette.INSET,
+                         highlightthickness=1, highlightbackground=Palette.PANEL_EDGE)
+        self._view_w = width
+        self._view_h = height
+        self._bins = np.zeros((self._BIN_COUNT, width, 3), dtype=np.uint8)
+        self._bin_freqs = None
+        self._freqs_fs = None
+        self._image = None
+        self._item = self.create_image(0, 0, anchor="nw")
+
+    def _freqs_for(self, fs: float) -> np.ndarray:
+        if self._freqs_fs != fs:
+            self._bin_freqs = np.logspace(
+                math.log10(self._F_LO), math.log10(fs / 2.0), self._BIN_COUNT)
+            self._freqs_fs = fs
+        return self._bin_freqs
+
+    def update_samples(self, samples, fs: float, speed: float, gain_db: float) -> None:
+        if samples is None or len(samples) < self._FFT_SIZE or fs <= 0:
+            return
+        columns = max(1, min(8, int(round(speed))))
+        # scipy computes the whole overlapping-frame batch in one call, with
+        # correct Hann-window normalization and no boundary padding — no
+        # hand-rolled slicing/indexing to get subtly wrong.
+        needed = self._FFT_SIZE + self._HOP * (columns - 1)
+        tail = samples[-needed:] if len(samples) >= needed else samples
+        if len(tail) < self._FFT_SIZE:
+            return
+        fft_freqs, _, frames = _stft(
+            tail, fs=fs, window="hann", nperseg=self._FFT_SIZE,
+            noverlap=self._FFT_SIZE - self._HOP, boundary=None, padded=False)
+        n_frames = frames.shape[1]
+        if n_frames == 0:
+            return
+        take = min(columns, n_frames)
+        mag_db = 20.0 * np.log10(np.abs(frames[:, -take:]) + 1e-9)
+
+        bin_freqs = self._freqs_for(fs)
+        cols = []
+        for i in range(take):
+            db = np.interp(bin_freqs, fft_freqs, mag_db[:, i]) + gain_db
+            norm = np.clip((db - self._DB_FLOOR) / (self._DB_CEIL - self._DB_FLOOR), 0.0, 1.0)
+            cols.append(_HEAT_LUT[(norm * 255).astype(np.uint8)][::-1])  # low freq at bottom
+
+        shift = len(cols)
+        self._bins = np.roll(self._bins, -shift, axis=1)
+        for k, col in enumerate(cols):
+            self._bins[:, self._view_w - shift + k, :] = col
+        image = PILImage.fromarray(self._bins, mode="RGB").resize(
+            (self._view_w, self._view_h), PILImage.Resampling.LANCZOS)
+        self._image = ImageTk.PhotoImage(image)
+        self.itemconfigure(self._item, image=self._image)
 
 
 class BarRow(tk.Canvas):

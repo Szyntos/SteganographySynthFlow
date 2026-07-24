@@ -75,15 +75,46 @@ class _NoteControl:
         self.midi_enabled = False
 
 
+_SCOPE_LEN = 16384
+
+
 class _EngineBase:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._volume: float = 1.0
         self._stream = None
         self._lock = threading.Lock()
+        self._scope_buf = np.zeros(_SCOPE_LEN, dtype=np.float32)
+        self._scope_pos = 0
 
     def set_volume(self, vol: float) -> None:
         self._volume = float(vol)
+
+    def _scope_write(self, samples: np.ndarray) -> None:
+        """Called from inside the audio callback (lock held): copy the chunk
+        just produced into a circular buffer the GUI thread polls for the
+        live scope, so the viewer always shows real, currently-audible
+        samples rather than a re-synthesized preview."""
+        buf = self._scope_buf
+        length = len(buf)
+        n = len(samples)
+        if n >= length:
+            buf[:] = samples[-length:]
+            self._scope_pos = 0
+            return
+        end = self._scope_pos + n
+        if end <= length:
+            buf[self._scope_pos:end] = samples
+        else:
+            first = length - self._scope_pos
+            buf[self._scope_pos:] = samples[:first]
+            buf[:end - length] = samples[first:]
+        self._scope_pos = end % length
+
+    def get_scope_samples(self) -> np.ndarray:
+        with self._lock:
+            return np.concatenate((self._scope_buf[self._scope_pos:],
+                                   self._scope_buf[:self._scope_pos]))
 
     def is_running(self) -> bool:
         return self._stream is not None
@@ -334,6 +365,7 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
                 enc_chunk = self._enc.process(frames)
                 arr = np.array(enc_chunk.get_samples(), dtype=np.float32) * self._volume
                 outdata[:, 0] = arr
+                self._scope_write(arr)
                 if self._output2_enabled:
                     self._secondary_buffer.append(arr.copy())
         finally:
@@ -542,6 +574,7 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
 
                 enc_chunk = self._enc.process(frames)
                 enc_samples = np.array(enc_chunk.get_samples(), dtype=np.float32)
+                self._scope_write(enc_samples)
 
                 dec_samples = self._dec.process_chunk(enc_samples, frames)
 

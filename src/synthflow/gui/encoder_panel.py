@@ -8,7 +8,8 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
 from synthflow.gui.settings_pane import DspSettingsPane
-from synthflow.gui.wave_editor import WaveEditorWindow, WaveViewer
+from synthflow.gui.wave_editor import (WaveEditorWindow, WaveViewer, ScopeViewer,
+                             SpectrogramViewer)
 from synthflow.gui.widgets import (BipolarBar, FileRow, LabeledScale, Panel, Section,
                          Segmented, VBarBank)
 from synthflow.core.SerializerMode import SerializerMode
@@ -158,19 +159,48 @@ class EncoderPanel(Panel):
         # ── wave shape ──────────────────────────────────────────────────────
         wave = Section(body, "Waveform  (click to edit)")
         wave.grid(row=4, column=0, sticky="ew")
+        wave_left = ttk.Frame(wave.content)
+        wave_left.grid(row=0, column=0, sticky="nw")
         self._wave_viewer = WaveViewer(
-            wave.content, engine.get_wave_params(), on_click=self._open_wave_editor)
+            wave_left, engine.get_wave_params(), on_click=self._open_wave_editor)
         self._wave_viewer.pack(anchor="w")
-        ttk.Label(wave.content, text="POST FILTER", style="Section.TLabel").pack(
+        ttk.Label(wave_left, text="POST FILTER", style="Section.TLabel").pack(
             anchor="w", pady=(6, 2))
         self._filtered_viewer = WaveViewer(
-            wave.content, engine.get_filtered_wave_params())
+            wave_left, engine.get_filtered_wave_params())
         self._filtered_viewer.pack(anchor="w")
         self._wave_editor = None
 
+        wave_right = ttk.Frame(wave.content)
+        wave_right.grid(row=0, column=1, sticky="nw", padx=(12, 0))
+        ttk.Label(wave_right, text="LIVE SCOPE", style="Section.TLabel").pack(anchor="w")
+        self._scope_viewer = ScopeViewer(wave_right, width=220, height=122)
+        self._scope_viewer.pack(anchor="w", pady=(2, 0))
+
+        # ── spectrogram ──────────────────────────────────────────────────────
+        spectro = Section(body, "Spectrogram")
+        spectro.grid(row=5, column=0, sticky="ew")
+        # Capped at the spectrogram's own width (not "nw" would sag to its
+        # natural width, "ew" would stretch to the panel's full width) — the
+        # sliders below stretch to fill this frame, not the panel body.
+        spectro_wrap = ttk.Frame(spectro.content)
+        spectro_wrap.grid(row=0, column=0, sticky="nw")
+        spectro_wrap.columnconfigure(0, weight=1)
+        self._spectrogram = SpectrogramViewer(spectro_wrap, width=420, height=200)
+        self._spectrogram.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        spec_ctrl = ttk.Frame(spectro_wrap)
+        spec_ctrl.grid(row=1, column=0, sticky="ew")
+        spec_ctrl.columnconfigure(0, weight=1)
+        self._spectro_speed = LabeledScale(
+            spec_ctrl, "Speed", 1, 8, fmt=lambda v: f"{v:.0f}x", init=2, step=1)
+        self._spectro_speed.grid(row=0, column=0, sticky="ew")
+        self._spectro_gain = LabeledScale(
+            spec_ctrl, "Gain", -40, 40, fmt=lambda v: f"{v:+.0f}dB", init=0, step=1)
+        self._spectro_gain.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+
         # ── synth voice: envelopes (amp | filter, side by side) ─────────────
         envs = Section(body, "Envelopes  (amp / filter)")
-        envs.grid(row=5, column=0, sticky="ew")
+        envs.grid(row=6, column=0, sticky="ew")
         self._build_adsr(envs.content, "amp_env", column=0)
         ttk.Separator(envs.content, orient="vertical").grid(
             row=0, column=1, sticky="ns", padx=8)
@@ -178,12 +208,12 @@ class EncoderPanel(Panel):
 
         # ── synth voice: filter (same bar geometry as the envelopes) ────────
         filt = Section(body, "Filter  (resonant low-pass)")
-        filt.grid(row=6, column=0, sticky="ew")
+        filt.grid(row=7, column=0, sticky="ew")
         self._build_filter_bars(filt.content)
 
         # ── advanced DSP (hideable) ─────────────────────────────────────────
         self._dsp_pane = DspSettingsPane(body, settings, self._on_apply_dsp)
-        self._dsp_pane.grid(row=7, column=0, sticky="ew")
+        self._dsp_pane.grid(row=8, column=0, sticky="ew")
 
         self._update_kind_state()
         self._poll_position()
@@ -399,6 +429,12 @@ class EncoderPanel(Panel):
         # Live post-filter view: redraws as the filter envelope sweeps the
         # cutoff while playing (and tracks slider moves while idle).
         self._filtered_viewer.set_params(self._engine.get_filtered_wave_params())
+        scope_samples = self._engine.get_scope_samples()
+        self._scope_viewer.update_samples(
+            scope_samples, self._engine.get_encoder_f0(), self._settings.fs_out)
+        self._spectrogram.update_samples(
+            scope_samples, self._settings.fs_out,
+            self._spectro_speed.get(), self._spectro_gain.get())
         self.after(self._settings.gui_poll_interval_ms, self._poll_position)
 
     def destroy(self) -> None:
