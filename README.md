@@ -10,9 +10,10 @@ I built this mostly to see if I could get a covert channel riding on
 something that actually sounds like a musical instrument, rather than
 noise or a dial-up modem screech. It works.
 
-## Demo
+## Demo (with sound)
 
-<video src="docs/media/Demo.mp4" controls width="720"></video>
+[<video src="docs/media/Demo.mp4" controls width="720"></video>](https://github.com/user-attachments/assets/99b069e2-b240-4cd7-a025-2a35f6e783c0
+)
 
 ## How it actually works
 
