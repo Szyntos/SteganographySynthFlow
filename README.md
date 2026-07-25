@@ -10,6 +10,10 @@ I built this mostly to see if I could get a covert channel riding on
 something that actually sounds like a musical instrument, rather than
 noise or a dial-up modem screech. It works.
 
+## Demo
+
+<video src="docs/media/Demo.mp4" controls width="720"></video>
+
 ## How it actually works
 
 - **The carrier.** `AdditiveWaveGenerator` renders `total_harmonics` (50)
