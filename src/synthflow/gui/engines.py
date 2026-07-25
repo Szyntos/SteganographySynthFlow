@@ -177,15 +177,21 @@ class _EncoderSideMixin:
         gate_active = self._notes.gate_active()
         self._enc.set_voice_enabled(gate_active)
         midi_note = self._notes.note_state.current_note_or(-1) if gate_active else -1
+        note_gen = self._notes.note_state.current_gen_or(-1) if gate_active else -1
         note_held = midi_note >= 0
-        if gate_active and midi_note != self._last_gate_note:
+        gate_key = (midi_note, note_gen)
+        if gate_active and gate_key != self._last_gate_note:
             # Retrigger on every key change — legato included: each new key
-            # resets both envelopes and restarts the attack from zero.
+            # resets both envelopes and restarts the attack from zero. The
+            # generation half of the key also catches a same-pitch
+            # note-off/note-on pair that lands between two polls of this
+            # callback (e.g. back-to-back MIDI file events at the same
+            # timestamp), which a plain pitch comparison would miss.
             if note_held:
                 self._enc.note_on()
             else:
                 self._enc.note_off()
-        self._last_gate_note = midi_note if gate_active else None
+        self._last_gate_note = gate_key if gate_active else None
         return note_held
 
     # ── note control ────────────────────────────────────────────────────────
@@ -315,7 +321,7 @@ class EncoderEngine(_EngineBase, _EncoderSideMixin):
         self._enc = EncoderDSP(settings)
         self._enc.set_f0(settings.pitch_default_hz)
         self._notes = _NoteControl()
-        self._last_gate_note: Optional[int] = None
+        self._last_gate_note: Optional[Tuple[int, int]] = None
 
     def set_output_device2(self, device: Optional[int]) -> None:
         self._output_device2 = device
@@ -502,7 +508,7 @@ class LinkedEngine(_EngineBase, _EncoderSideMixin, _DecoderSideMixin):
         self._enc.set_f0(settings.pitch_default_hz)
         self._dec.set_f0(settings.pitch_default_hz)
         self._notes = _NoteControl()
-        self._last_gate_note: Optional[int] = None
+        self._last_gate_note: Optional[Tuple[int, int]] = None
 
     def set_source(self, source: str) -> None:
         self._source = source

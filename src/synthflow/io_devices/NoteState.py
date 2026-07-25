@@ -1,5 +1,5 @@
 import threading
-from typing import List
+from typing import List, Tuple
 
 
 def midi_note_to_hz(midi_note: int, a4_hz: float = 440.0) -> float:
@@ -16,18 +16,23 @@ class NoteState:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._held: List[int] = []
+        # (midi_note, generation) pairs; generation is a monotonic counter
+        # bumped on every note_on so a fast off/on of the same pitch between
+        # two polls of the audio thread still looks like a change to
+        # current_gen_or(), even though current_note_or() alone would not
+        # have moved.
+        self._held: List[Tuple[int, int]] = []
+        self._gen = 0
 
     def note_on(self, midi_note: int) -> None:
         with self._lock:
-            if midi_note in self._held:
-                self._held.remove(midi_note)
-            self._held.append(midi_note)
+            self._held = [pair for pair in self._held if pair[0] != midi_note]
+            self._gen += 1
+            self._held.append((midi_note, self._gen))
 
     def note_off(self, midi_note: int) -> None:
         with self._lock:
-            if midi_note in self._held:
-                self._held.remove(midi_note)
+            self._held = [pair for pair in self._held if pair[0] != midi_note]
 
     def has_note(self) -> bool:
         with self._lock:
@@ -37,7 +42,15 @@ class NoteState:
         with self._lock:
             if not self._held:
                 return fallback
-            return self._held[-1]
+            return self._held[-1][0]
+
+    def current_gen_or(self, fallback: int) -> int:
+        """Generation number of the currently sounding note, so callers can
+        detect a same-pitch note-off/note-on that happened between polls."""
+        with self._lock:
+            if not self._held:
+                return fallback
+            return self._held[-1][1]
 
     def reset(self) -> None:
         with self._lock:

@@ -7,13 +7,8 @@ __pycache__/
 
 .idea
 .claude
-*.mp3
-*.mp4
-*.wav
-*.flac
-*.flacc
 
-assets
+my_assets/
 decoded
 logs/
 exp/output/

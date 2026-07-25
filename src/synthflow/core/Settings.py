@@ -131,8 +131,8 @@ class SyncSettings:
 
 class PayloadSettings:
     def __init__(self):
-        self.modulator_wav_path: str = os.path.join(_REPO_ROOT, "assets", "sinesweep.wav")
-        self.image_path: str = os.path.join(_REPO_ROOT, "assets", "test.png")
+        self.modulator_wav_path: str = os.path.join(_REPO_ROOT, "assets", "idk47.wav")
+        self.image_path: str = os.path.join(_REPO_ROOT, "assets", "test2.jpg")
         self.image_target_w: int = 60
         self.image_target_h: int = 60
         self.image_channels: int = 3
